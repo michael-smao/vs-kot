@@ -22,6 +22,7 @@
 // one. Everything lives in ~/Library/Caches/vs-kot-update-check, away from Documents, where macOS would first ask
 // for folder access. Give a second argument, for example /Applications/vs-kot-update-check, to try the exchange in
 // another place; the folder is removed again at the end. Set KEEP=1 to keep the test folders for a look.
+// Tab completion is switched off in the test copies: a check must not reach the model server the user works with.
 
 import * as cp from 'node:child_process';
 import * as crypto from 'node:crypto';
@@ -106,7 +107,7 @@ function installOldCopy(): void {
 }
 
 function start(): void {
-	run('/usr/bin/open', ['-n', app, '--args', ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, `--remote-debugging-port=${cdpPort}`, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain']);
+	run('/usr/bin/open', ['-n', app, '--args', ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, `--remote-debugging-port=${cdpPort}`, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain', '--disable-extension=vs-kot.tab-completion']);
 }
 
 /** The workbench window of the running test app, reached the way a browser's developer tools reach a page. */
