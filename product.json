@@ -1,5 +1,5 @@
 {
-	"//": "vs-claude: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX).",
+	"//": "vs-claude: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsClaudeManagedSettings (locked settings), vsClaudeDefaultSettings (changeable defaults) and esbenp.prettier-vscode in builtInExtensions.",
 	"nameShort": "vs-claude",
 	"nameLong": "vs-claude",
 	"applicationName": "vs-claude",
@@ -92,6 +92,22 @@
 					"flags": "verified"
 				},
 				"publisherDisplayName": "Microsoft"
+			}
+		},
+		{
+			"name": "esbenp.prettier-vscode",
+			"version": "12.4.0",
+			"sha256": "fb730ea4306d09cdc0a3aaa9e9baae28058cc97a4fbfce8b056b377a0639a9fe",
+			"repo": "https://github.com/prettier/prettier-vscode",
+			"metadata": {
+				"id": "96fa4707-6983-4489-b7c5-d5ffdfdcce90",
+				"publisherId": {
+					"publisherId": "d16f4e39-2ffb-44e3-9c0d-79d873570e3a",
+					"publisherName": "esbenp",
+					"displayName": "Prettier",
+					"flags": ""
+				},
+				"publisherDisplayName": "Prettier"
 			}
 		}
 	],
@@ -254,5 +270,14 @@
 		"GitHub.copilot-chat"
 	],
 	"sessionsWindowAllowedExtensions": [],
-	"voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice"
+	"voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice",
+	"vsClaudeManagedSettings": {
+		"editor.formatOnSave": true,
+		"editor.tabSize": 4,
+		"prettier.tabWidth": 4,
+		"prettier.useTabs": false
+	},
+	"vsClaudeDefaultSettings": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	}
 }

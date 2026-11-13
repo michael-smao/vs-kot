@@ -16,6 +16,22 @@ import { Registry } from '../../registry/common/platform.js';
 import { getErrorMessage } from '../../../base/common/errors.js';
 import * as json from '../../../base/common/json.js';
 import { PolicyName } from '../../../base/common/policy.js';
+import product from '../../product/common/product.js';
+
+/**
+ * vs-claude: the settings the team has fixed (`vsClaudeManagedSettings` in product.json). They are served from the
+ * policy layer: the one layer that wins over whatever a user, a workspace or a language override sets, that refuses
+ * writes, and that the Settings editor shows as managed.
+ */
+const managedSettings: ReadonlyMap<string, unknown> = new Map(Object.entries(product.vsClaudeManagedSettings ?? {}));
+
+function createPolicyConfigurationModel(logService: ILogService): ConfigurationModel {
+	const model = ConfigurationModel.createEmptyModel(logService);
+	for (const [key, value] of managedSettings) {
+		model.setValue(key, value);
+	}
+	return model;
+}
 
 export class DefaultConfiguration extends Disposable {
 
@@ -100,7 +116,7 @@ export interface IPolicyConfiguration {
 
 export class NullPolicyConfiguration implements IPolicyConfiguration {
 	readonly onDidChangeConfiguration = Event.None;
-	readonly configurationModel = ConfigurationModel.createEmptyModel(new NullLogService());
+	readonly configurationModel = createPolicyConfigurationModel(new NullLogService()); // vs-claude: managed settings apply without any policy service too
 	async initialize() { return this.configurationModel; }
 }
 
@@ -128,7 +144,7 @@ export class PolicyConfiguration extends Disposable implements IPolicyConfigurat
 		@ILogService private readonly logService: ILogService
 	) {
 		super();
-		this._configurationModel = ConfigurationModel.createEmptyModel(this.logService);
+		this._configurationModel = createPolicyConfigurationModel(this.logService); // vs-claude: starts with the managed settings
 		this.configurationRegistry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
 	}
 
@@ -255,6 +271,9 @@ export class PolicyConfiguration extends Disposable implements IPolicyConfigurat
 		const wasEmpty = this._configurationModel.isEmpty();
 
 		for (const key of keys) {
+			if (managedSettings.has(key)) {
+				continue; // vs-claude: fixed by the team, no policy can change or remove it
+			}
 			const property = configurationProperties[key] ?? excludedConfigurationProperties[key];
 			const policyName = property?.policy?.name ?? property?.policyReference?.name;
 			if (policyName) {

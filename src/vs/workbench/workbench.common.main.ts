@@ -291,6 +291,9 @@ import './contrib/scm/browser/scm.service.contribution.js';
 // vs-claude: Change Review
 import './contrib/changeReview/browser/changeReview.contribution.js';
 
+// vs-claude: Team Settings
+import './contrib/vsClaudeTeam/common/teamSettings.contribution.js';
+
 // Debug
 import './contrib/debug/browser/debug.contribution.js';
 import './contrib/debug/browser/debugEditorContribution.js';

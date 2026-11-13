@@ -122,6 +122,11 @@ export interface IProductConfiguration {
 	readonly sharedDataFolderName: string; // location for shared data (e.g. ~/.vscode-insiders-shared)
 
 	readonly builtInExtensions?: IBuiltInExtension[];
+
+	/** vs-claude: settings the team has fixed. Nobody can change them, and the Settings editor shows them as managed. */
+	readonly vsClaudeManagedSettings?: IStringDictionary<unknown>;
+	/** vs-claude: the team's default values for settings. Unlike the managed ones they can be changed. */
+	readonly vsClaudeDefaultSettings?: IStringDictionary<unknown>;
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];
 
