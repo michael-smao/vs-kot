@@ -31,7 +31,7 @@ const root = packagedApp ? path.join(repo, '.build', 'pkgtest') : path.join(repo
 fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
 // the opposite of every locked team setting: the locks have to win
 fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ 'changeReview.autoReveal': false, 'editor.formatOnSave': false, 'editor.tabSize': 2, 'prettier.tabWidth': 2, 'prettier.useTabs': true, ...(process.env.EXTRA ? JSON.parse(process.env.EXTRA) : {}) }));
-setTimeout(() => { console.log('HARD TIMEOUT'); process.exit(2); }, 240000).unref();
+setTimeout(() => { console.log('HARD TIMEOUT'); process.exit(2); }, 420000).unref();
 const results = []; const check = (name, ok, detail) => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
 (async () => {
 	if (packagedApp) {
@@ -99,6 +99,71 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 		const staged = cp.execSync('git diff --cached --name-only', { cwd: ws, encoding: 'utf8' }).trim();
 		const unstaged = cp.execSync('git diff --name-only', { cwd: ws, encoding: 'utf8' }).trim().split('\n').filter(Boolean);
 		check('Approve (⌘Y) stages the change in git', staged.split('\n').includes('src/review.ts') && !unstaged.includes('src/review.ts'), `staged: ${staged.replace(/\n/g, ', ') || 'nothing'}`);
+		// --- change review: the arrows of the bar stay where they are, so that a reviewer can click through files and
+		// changes on one spot. The workspace has a file of every kind that used to move them (bar/ in make-workspace.sh).
+		{
+			// What the bar shows, and the left and right edge of each button. An arrow that is not shown is null.
+			const reviewBar = () => page.evaluate(() => {
+				const widget = [...document.querySelectorAll('.editor-group-container.active .change-review-bar-widget')].find(b => b.getBoundingClientRect().width > 0);
+				if (!widget) { return null; }
+				const place = e => { const r = e.getBoundingClientRect(); return r.width > 0 ? { left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, y: Math.round(r.top + r.height / 2) } : null; };
+				const [changes, decision, files] = [...widget.querySelectorAll('.change-review-bar-section')];
+				const [up, down] = [...changes.querySelectorAll('.monaco-button')].map(place);
+				const [previous, next] = [...files.querySelectorAll('.monaco-button')].map(place);
+				return { change: changes.textContent, file: files.textContent, up, down, previous, next, approve: [...decision.querySelectorAll('.monaco-button')].map(place).filter(Boolean).pop() };
+			});
+			// A bar whose change label is still empty belongs to a file whose changes are not computed yet
+			const barWhen = async (wanted, ms = 15000) => { for (const start = Date.now(); Date.now() - start < ms; await page.waitForTimeout(40)) { const state = await reviewBar(); if (state && state.change !== '' && wanted(state)) { return state; } } return undefined; };
+			const places = (states, key) => [...new Set(states.filter(s => s[key]).map(s => `${s[key].left}-${s[key].right}`))];
+
+			// once around all files, every click on the spot where the arrow to the next file was at the start
+			await open('plain1.ts');
+			let at = await barWhen(() => true);
+			const total = Number(at?.file.match(/of (\d+)$/)?.[1] ?? 0);
+			const spot = at?.next;
+			const nextFile = async () => { const before = at.file; await page.mouse.click((spot.left + spot.right) / 2, spot.y); at = await barWhen(s => s.file !== before); return at; };
+			const seen = at ? [at] : [];
+			while (seen.length < total && await nextFile()) { seen.push(at); }
+			const kinds = ['New File', 'Deleted File', '1 of 1', '1 of 12'].filter(kind => seen.some(s => s.change === kind));
+			const reached = new Set(seen.map(s => s.file)).size;
+			check('review bar: clicking one spot steps through every file under review', total >= 10 && reached === total && kinds.length === 4, `${reached} of ${total} files reached, among them: ${kinds.join(', ')}`);
+			// One place only counts when every file was looked at: a walk that got stuck has seen too little to say so
+			const arrows = ['up', 'down', 'previous', 'next'].map(key => `${key} ${places(seen, key).join(' and ') || 'never shown'}`);
+			const approveEnds = [...new Set(seen.map(s => s.approve?.right))];
+			check('review bar: every arrow is at one place in every file, and Approve File ends at one place', reached === total && ['up', 'down', 'previous', 'next'].every(key => places(seen, key).length === 1) && approveEnds.length === 1, `in ${reached} of ${total} files: ${arrows.join(', ')}, Approve File ends at ${approveEnds.join(' and ')}`);
+
+			// the file with twelve changes: the arrow to the next change, clicked on one spot
+			const toFile = async wanted => { for (let i = 0; at && !wanted(at) && i < total; i++) { await nextFile(); } return at && wanted(at) ? at : undefined; };
+			const many = await toFile(s => s.change === '1 of 12');
+			const steps = many ? [many] : [];
+			for (let i = 0; many && i < 13 && steps.at(-1).change !== '12 of 12'; i++) {
+				const before = steps.at(-1).change;
+				await page.mouse.click((many.down.left + many.down.right) / 2, many.down.y);
+				const state = await barWhen(s => s.change !== before && / of 12$/.test(s.change), 3000);
+				if (state) { steps.push(state); }
+			}
+			check('review bar: the arrows for changes stay put through all twelve changes of a file', new Set(steps.map(s => s.change)).size === 12 && places(steps, 'down').join() === places(seen, 'down').join() && places(steps, 'up').join() === places(seen, 'up').join(), `${new Set(steps.map(s => s.change)).size} of 12 changes reached, down ${places(steps, 'down').join(' and ')}, up ${places(steps, 'up').join(' and ')}`);
+
+			// two clicks before the next file is open have to move two files on, not one
+			at = await barWhen(() => true);
+			const twoOn = `File ${(Number(at?.file.match(/^File (\d+) of/)?.[1] ?? 0) + 1) % total + 1} of ${total}`;
+			await page.evaluate(() => { const widget = [...document.querySelectorAll('.editor-group-container.active .change-review-bar-widget')].find(b => b.getBoundingClientRect().width > 0); const next = widget.querySelectorAll('.change-review-bar-section')[2].querySelectorAll('.monaco-button')[1]; next.click(); next.click(); });
+			await barWhen(s => s.file === twoOn, 8000); await page.waitForTimeout(1000);
+			const from = at?.file; at = await barWhen(() => true);
+			check('review bar: two clicks before the next file is open move two files on', at?.file === twoOn, `from "${from}" to "${at?.file}"`);
+
+			// Approve File, clicked on one spot, approves three files in a row
+			const stagedFiles = () => cp.execSync('git diff --cached --name-only', { cwd: ws, encoding: 'utf8' }).split('\n').filter(Boolean).length;
+			const plain = await toFile(s => s.change === '1 of 1');
+			const stagedBefore = stagedFiles();
+			for (let i = 1; plain && i <= 3 && stagedFiles() === stagedBefore + i - 1; i++) {
+				const before = at.file;
+				await page.mouse.click(plain.approve.right - 30, plain.approve.y);
+				for (const start = Date.now(); Date.now() - start < 15000 && stagedFiles() < stagedBefore + i; await page.waitForTimeout(200)) { }
+				at = await barWhen(s => s.file !== before) ?? at;
+			}
+			check('review bar: Approve File on one spot approves three files in a row', stagedFiles() === stagedBefore + 3, `${stagedFiles() - stagedBefore} more file(s) staged, the bar is at "${at?.file}"`);
+		}
 	} catch (e) { check('the run finished', false, String(e && e.message || e).slice(0, 300)); }
 	await Promise.race([app.close(), new Promise(r => setTimeout(r, 15000))]);
 	const logs = cp.execSync(`find "${path.join(ud, 'logs')}" -name "*Tab Completion*" | head -1`, { encoding: 'utf8' }).trim();
