@@ -17,7 +17,8 @@
 //
 // Both models have to be set up on this Mac, which needs 16 GB of memory or more for the 7B.
 //
-//   node .vs-kot/release-check/default-model.ts
+//   node .vs-kot/release-check/default-model.ts [numbers of the cases to run]
+//   PACKAGED_APP=<path to vs-kot.app> node .vs-kot/release-check/default-model.ts   (the app instead of the source build)
 
 import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
@@ -26,6 +27,7 @@ import { _electron } from 'playwright';
 import { getIsolatedClaudeRecord, ISOLATED_PORT, realModelServerHome, repo, scratch, stopIsolatedModelServer } from './isolated.ts';
 
 const SMALL = 'qwen2.5-coder:1.5b-base'; const LARGE = 'qwen2.5-coder:7b-base';
+const packagedApp = process.env.PACKAGED_APP;
 const root = path.join(repo, '.vs-kot', 'tp'); const ud = path.join(root, 'ud');
 const ws = path.join(scratch, 'default-model');
 const home = path.join(scratch, 'tab-completion-store');
@@ -68,8 +70,9 @@ async function inEditor(run: (editor: { suggest(ms: number): Promise<string>; no
 	fs.writeFileSync(path.join(ws, 'a.ts'), 'export interface Item { name: string; price: number; qty: number; }\n\nexport function total(items: Item[]): number {\n    return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\n\n');
 	fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
 	fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ ...getIsolatedClaudeRecord(), 'changeReview.enabled': false, 'editor.formatOnSave': false }));
-	const env: Record<string, string | undefined> = { ...process.env, NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1', VS_KOT_TAB_COMPLETION_HOME: home, VS_KOT_TAB_COMPLETION_PORT: String(ISOLATED_PORT) }; delete env.ELECTRON_RUN_AS_NODE;
-	const app = await _electron.launch({ executablePath: path.join(repo, '.build', 'electron', 'vs-kot.app', 'Contents', 'MacOS', 'vs-kot'), args: [repo, ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain'], env, timeout: 120000 });
+	const env: Record<string, string | undefined> = { ...process.env, VS_KOT_TAB_COMPLETION_HOME: home, VS_KOT_TAB_COMPLETION_PORT: String(ISOLATED_PORT) }; delete env.ELECTRON_RUN_AS_NODE;
+	if (!packagedApp) { Object.assign(env, { NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1' }); } else { delete env.NODE_ENV; delete env.VSCODE_DEV; delete env.VSCODE_CLI; }
+	const app = await _electron.launch({ executablePath: packagedApp ? path.join(packagedApp, 'Contents', 'MacOS', 'vs-kot') : path.join(repo, '.build', 'electron', 'vs-kot.app', 'Contents', 'MacOS', 'vs-kot'), args: [...(packagedApp ? [] : [repo]), ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain'], env, timeout: 120000 });
 	endEditor = () => app.process().kill();
 	try {
 		const page = await app.firstWindow({ timeout: 120000 });

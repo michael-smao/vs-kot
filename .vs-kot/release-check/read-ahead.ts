@@ -12,6 +12,7 @@
 // long a suggestion takes also depends on how long it is.
 //
 //   node .vs-kot/release-check/read-ahead.ts [model]
+//   PACKAGED_APP=<path to vs-kot.app> node .vs-kot/release-check/read-ahead.ts [model]   (the app instead of the source build)
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -19,6 +20,7 @@ import { _electron } from 'playwright';
 import { getIsolatedClaudeRecord, getIsolatedModelServer, repo, scratch, stopIsolatedModelServer } from './isolated.ts';
 
 const model = process.argv[2];
+const packagedApp = process.env.PACKAGED_APP;
 const root = path.join(repo, '.vs-kot', 'tp'); const ud = path.join(root, 'ud');
 const ws = path.join(scratch, 'read-ahead');
 const isolated = getIsolatedModelServer();
@@ -51,8 +53,9 @@ const logLines = () => {
 };
 
 (async () => {
-	const env: Record<string, string | undefined> = { ...process.env, NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1', ...isolated }; delete env.ELECTRON_RUN_AS_NODE;
-	const app = await _electron.launch({ executablePath: path.join(repo, '.build', 'electron', 'vs-kot.app', 'Contents', 'MacOS', 'vs-kot'), args: [repo, ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, '--log=vs-kot.tab-completion:trace', '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain'], env, timeout: 120000 });
+	const env: Record<string, string | undefined> = { ...process.env, ...isolated }; delete env.ELECTRON_RUN_AS_NODE;
+	if (!packagedApp) { Object.assign(env, { NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1' }); } else { delete env.NODE_ENV; delete env.VSCODE_DEV; delete env.VSCODE_CLI; }
+	const app = await _electron.launch({ executablePath: packagedApp ? path.join(packagedApp, 'Contents', 'MacOS', 'vs-kot') : path.join(repo, '.build', 'electron', 'vs-kot.app', 'Contents', 'MacOS', 'vs-kot'), args: [...(packagedApp ? [] : [repo]), ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, '--log=vs-kot.tab-completion:trace', '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain'], env, timeout: 120000 });
 	endEditor = () => app.process().kill();
 	try {
 		const page = await app.firstWindow({ timeout: 120000 });
