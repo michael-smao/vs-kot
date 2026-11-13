@@ -675,15 +675,16 @@ suite('ActivitybarPart', () => {
 				modernCompactDensity: sizesFor(false, true, true),
 			},
 			{
+				// vs-claude: the bar has no Accounts and Manage icons, so no sizes are passed for them.
 				// Items stack flush against each other, so the stride is just the action height.
-				classicDefault: { compositeSize: 48, overflowActionSize: 48, globalActivities: { actionHeight: 48, actionGap: 0 } },
-				classicCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: { actionHeight: 28, actionGap: 0 } },
+				classicDefault: { compositeSize: 48, overflowActionSize: 48, globalActivities: undefined },
+				classicCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: undefined },
 				// Modern UI separates items with an 8px gap, but only at the default size.
-				modernDefault: { compositeSize: 44, overflowActionSize: 44, globalActivities: { actionHeight: 36, actionGap: 8 } },
-				modernCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: { actionHeight: 28, actionGap: 0 } },
+				modernDefault: { compositeSize: 44, overflowActionSize: 44, globalActivities: undefined },
+				modernCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: undefined },
 				// The compact density tightens that gap to 4px, and the stride has to follow it
 				// so items do not collapse into the overflow menu early.
-				modernCompactDensity: { compositeSize: 40, overflowActionSize: 40, globalActivities: { actionHeight: 36, actionGap: 4 } },
+				modernCompactDensity: { compositeSize: 40, overflowActionSize: 40, globalActivities: undefined },
 			}
 		);
 	});

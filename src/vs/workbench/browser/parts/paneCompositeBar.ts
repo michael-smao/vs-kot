@@ -31,6 +31,7 @@ import { GestureEvent } from '../../../base/browser/touch.js';
 import { IPaneCompositePart } from './paneCompositePart.js';
 import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import { IViewsService } from '../../services/views/common/viewsService.js';
+import { applyVsClaudeActivityBarDefaults, vsClaudeActivityBarDefaultsVersion } from './vsClaudeActivityBar.js';
 
 interface IPlaceholderViewContainer {
 	readonly id: string;
@@ -111,6 +112,11 @@ export class PaneCompositeBar extends Disposable {
 		@IWorkbenchLayoutService protected readonly layoutService: IWorkbenchLayoutService,
 	) {
 		super();
+
+		// vs-claude: bring the activity bar icons to the fork's defaults before they are read
+		if (this.location === ViewContainerLocation.Sidebar) {
+			this.applyVsClaudeDefaults();
+		}
 
 		this.dndHandler = new CompositeDragAndDrop(this.viewDescriptorService, this.location, this.options.orientation,
 			async (id: string, focus?: boolean) => { return await this.paneCompositePart.openPaneComposite(id, focus) ?? null; },
@@ -667,6 +673,20 @@ export class PaneCompositeBar extends Disposable {
 			id,
 			visible,
 		} satisfies IViewContainerWorkspaceState)));
+	}
+
+	/**
+	 * vs-claude: applies the fork's default icons once per profile, and once more whenever those defaults
+	 * get a new version. What the user pins or unpins afterwards is kept.
+	 */
+	private applyVsClaudeDefaults(): void {
+		const appliedVersionKey = `${this.options.pinnedViewContainersKey}.vsClaudeDefaults`;
+		if (this.storageService.getNumber(appliedVersionKey, StorageScope.PROFILE, 0) >= vsClaudeActivityBarDefaultsVersion) {
+			return;
+		}
+
+		this.setPinnedViewContainers(applyVsClaudeActivityBarDefaults(this.getPinnedViewContainers()));
+		this.storageService.store(appliedVersionKey, vsClaudeActivityBarDefaultsVersion, StorageScope.PROFILE, StorageTarget.USER);
 	}
 
 	private getPinnedViewContainers(): IPinnedViewContainer[] {
