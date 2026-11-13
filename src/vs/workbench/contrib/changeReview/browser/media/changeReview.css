@@ -148,3 +148,10 @@
 .monaco-editor .change-review-bar-section.flagged .change-review-label {
 	color: var(--vscode-editorWarning-foreground);
 }
+
+/* the note below a removed block that is too long to be shown in full */
+.monaco-editor .change-review-removed-zone .change-review-removed-more {
+	padding-left: 12px;
+	font-style: italic;
+	opacity: 0.7;
+}

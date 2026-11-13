@@ -3,9 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { addDisposableListener } from '../../../../base/browser/dom.js';
+import { mainWindow } from '../../../../base/browser/window.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable, DisposableMap, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableMap, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { basename, isEqual } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -41,6 +43,9 @@ function toReviewFile(resource: ISCMResource): IChangeReviewFile | undefined {
 	return undefined;
 }
 
+/** How long nothing must have been typed or clicked before the reviewer is taken to changes that arrived. */
+const IDLE_BEFORE_REVEAL_MS = 3000;
+
 export class ChangeReviewService extends Disposable implements IChangeReviewService {
 
 	declare readonly _serviceBrand: undefined;
@@ -60,9 +65,17 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	/** The file that {@link navigateFile} is opening at the moment. */
 	private _navigationTarget: IChangeReviewFile | undefined;
 
+	/** Whether the reviewer wrote in the active editor since they went there. Then they are working in it, not waiting for changes. */
+	private _isWritingInActiveEditor = false;
+	/** Repositories whose files were never listed yet. What they list first is what was there before, not something new. */
+	private readonly _unlistedRepositories = new Set<ISCMRepository>();
+	private _isFirstListing = false;
+
 	private readonly _repositoryListeners = this._register(new DisposableMap<ISCMRepository>());
 	private readonly _updateFilesScheduler = this._register(new RunOnceScheduler(() => this._updateFiles(), 100));
 	private readonly _autoRevealScheduler = this._register(new RunOnceScheduler(() => this._revealIfIdle(), 300));
+	/** When a key or a mouse button was last pressed in the window. Someone who just did that is busy with something. */
+	private _lastInput = 0;
 
 	constructor(
 		@ISCMService private readonly _scmService: ISCMService,
@@ -82,6 +95,11 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		for (const repository of this._scmService.repositories) {
 			this._onDidAddRepository(repository);
 		}
+
+		this._register(this._editorService.onDidActiveEditorChange(() => this._isWritingInActiveEditor = false));
+		const onInput = () => this._lastInput = Date.now();
+		this._register(addDisposableListener(mainWindow.document, 'keydown', onInput, { capture: true, passive: true }));
+		this._register(addDisposableListener(mainWindow.document, 'mousedown', onInput, { capture: true, passive: true }));
 
 		this._register(this._configurationService.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration(CHANGE_REVIEW_ENABLED_SETTING) || e.affectsConfiguration(CHANGE_REVIEW_AUTO_REVEAL_SETTING)) {
@@ -140,14 +158,27 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		}
 
 		const store = new DisposableStore();
-		store.add(repository.provider.onDidChangeResources(() => this._updateFilesScheduler.schedule()));
-		store.add(repository.provider.onDidChangeResourceGroups(() => this._updateFilesScheduler.schedule()));
+		const onDidChange = () => {
+			if (this._unlistedRepositories.delete(repository)) {
+				this._isFirstListing = true;
+			}
+			this._updateFilesScheduler.schedule();
+		};
+		this._unlistedRepositories.add(repository);
+		store.add(repository.provider.onDidChangeResources(onDidChange));
+		store.add(repository.provider.onDidChangeResourceGroups(onDidChange));
+		store.add(toDisposable(() => this._unlistedRepositories.delete(repository)));
 		this._repositoryListeners.set(repository, store);
 
 		this._updateFilesScheduler.schedule();
 	}
 
 	private _updateFiles(): void {
+		// What a repository lists when the window opens was there before. It is shown in the status bar and can
+		// be gone to, but the reviewer is not taken away from the editor the window came back with.
+		const isFirstListing = this._isFirstListing;
+		this._isFirstListing = false;
+
 		const files: IChangeReviewFile[] = [];
 		const filesByEditorUri = new ResourceMap<IChangeReviewFile>();
 
@@ -192,8 +223,15 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		this._filesByEditorUri = filesByEditorUri;
 
 		this._onDidChange.fire();
-		if (hasNewFile) {
+		if (hasNewFile && !isFirstListing) {
 			this._autoRevealScheduler.schedule();
+		}
+	}
+
+	reportOwnEdit(uri: URI): void {
+		const active = EditorResourceAccessor.getOriginalUri(this._editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
+		if (active && isEqual(active, uri)) {
+			this._isWritingInActiveEditor = true;
 		}
 	}
 
@@ -235,11 +273,19 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	// --- navigation
 
 	/**
-	 * New changes arrived. Jump to them, unless the reviewer is in the middle of a file
-	 * that still has changes to review.
+	 * New changes arrived. Jump to them, unless the reviewer is in the middle of a file:
+	 * one that still has changes to review, or one they are writing in.
 	 */
 	private _revealIfIdle(): void {
-		if (!this.enabled || !this.autoReveal) {
+		if (!this.enabled || !this.autoReveal || this._isWritingInActiveEditor || this._editorService.activeEditor?.isDirty()) {
+			return; // someone with unsaved work in front of them is in the middle of it
+		}
+
+		// Someone who pressed a key or clicked a moment ago is doing something, wherever that is: opening a file,
+		// reading on, about to type. They are taken to the new changes once they have paused.
+		const idleFor = Date.now() - this._lastInput;
+		if (idleFor < IDLE_BEFORE_REVEAL_MS) {
+			this._autoRevealScheduler.schedule(IDLE_BEFORE_REVEAL_MS - idleFor + 50);
 			return;
 		}
 
@@ -253,10 +299,13 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 			return;
 		}
 
-		this.revealNextFile();
+		// Whoever is typing somewhere else, in the terminal or in a search box, keeps the keyboard: the file is
+		// opened, and their keystrokes do not end up in it
+		const hasEditorFocus = this._editorService.activeTextEditorControl?.hasTextFocus() ?? false;
+		this.revealNextFile(undefined, !hasEditorFocus);
 	}
 
-	async revealNextFile(after?: URI): Promise<boolean> {
+	async revealNextFile(after?: URI, preserveFocus = false): Promise<boolean> {
 		const pending = this.pendingFiles.filter(file => !after || !isEqual(file.uri, after));
 		if (pending.length === 0) {
 			if (after) {
@@ -277,7 +326,7 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 			next = this._files.slice(index + 1).find(file => pending.includes(file)) ?? next;
 		}
 
-		await this._openFile(next);
+		await this._openFile(next, preserveFocus);
 		return true;
 	}
 
@@ -315,11 +364,11 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		}
 	}
 
-	private async _openFile(file: IChangeReviewFile): Promise<void> {
+	private async _openFile(file: IChangeReviewFile, preserveFocus = false): Promise<void> {
 		const pane = await this._editorService.openEditor({
 			resource: file.editorUri,
 			label: file.kind === ChangeReviewFileKind.Deleted ? localize('deletedFileLabel', "{0} (Deleted)", basename(file.uri)) : undefined,
-			options: { revealIfOpened: true }
+			options: { revealIfOpened: true, preserveFocus }
 		});
 
 		const control = pane?.getControl();

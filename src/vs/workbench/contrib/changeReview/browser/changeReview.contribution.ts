@@ -27,9 +27,11 @@ import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase 
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { CHANGE_REVIEW_AUTO_REVEAL_SETTING, CHANGE_REVIEW_ENABLED_SETTING, ChangeReviewCommandId, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewService } from '../common/changeReview.js';
 import { ChangeReviewController } from './changeReviewController.js';
+import { ChangeReviewFilesService, IChangeReviewFilesService } from './changeReviewedFile.js';
 import { ChangeReviewService } from './changeReviewService.js';
 
 registerSingleton(IChangeReviewService, ChangeReviewService, InstantiationType.Delayed);
+registerSingleton(IChangeReviewFilesService, ChangeReviewFilesService, InstantiationType.Delayed);
 
 registerEditorContribution(ChangeReviewController.ID, ChangeReviewController, EditorContributionInstantiation.AfterFirstRender);
 

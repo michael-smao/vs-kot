@@ -1956,15 +1956,36 @@ export class CommandCenter {
 	// vs-kot: stages the given text as the content of a file. The change review of the workbench computes that
 	// text itself, from the staged version it shows, so that it does not depend on how fresh the documents here are.
 	@command('git.stageContent')
-	async stageContent(uri: Uri, contents: string): Promise<void> {
+	async stageContent(uri: Uri, contents: string, expected?: { readonly base: string | undefined }): Promise<true | { readonly actual: string | undefined } | undefined> {
 		if (!uri || uri.scheme !== 'file' || typeof contents !== 'string') {
-			return;
+			return undefined;
 		}
 
 		const encoding = workspace.textDocuments.find(document => document.uri.toString() === uri.toString())?.encoding ?? 'utf8';
+		// Line endings and a byte order mark are not what this is about, and they do not survive a text model unchanged
+		const normalize = (text: string | undefined) => text?.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
 
-		await this.runByRepository(uri, async (repository, resource) =>
-			await repository.stage(resource, contents, encoding));
+		const results = await this.runByRepository(uri, async (repository, resource) => {
+			if (expected) {
+				// The caller built the text on the staged version it saw a moment ago. When git has another one by
+				// now, because something was committed or staged in between, staging the text would undo that.
+				let actual: string | undefined;
+				try {
+					actual = await workspace.decode(await repository.buffer('', resource.fsPath), { encoding });
+				} catch {
+					actual = undefined; // git has no staged version of the file
+				}
+				if (normalize(actual) !== normalize(expected.base)) {
+					return { actual };
+				}
+			}
+
+			await repository.stage(resource, contents, encoding);
+			return true as const;
+		});
+
+		// Nothing when the file is in no repository, and when git failed: the caller takes both as "not staged"
+		return results[0];
 	}
 
 	@command('git.revertChange')

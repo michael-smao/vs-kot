@@ -91,11 +91,18 @@ export interface IChangeReviewService {
 	setPendingCount(uri: URI, count: number): void;
 
 	/**
+	 * The reviewer wrote in a file themselves. Someone who is writing is not taken to another file
+	 * because changes arrived there.
+	 */
+	reportOwnEdit(uri: URI): void;
+
+	/**
 	 * Opens the next file that still has changes to review and reveals its first one.
 	 * @param after the file the reviewer just finished; it is skipped.
+	 * @param preserveFocus leave the keyboard where it is.
 	 * @returns `false` when no such file is left.
 	 */
-	revealNextFile(after?: URI): Promise<boolean>;
+	revealNextFile(after?: URI, preserveFocus?: boolean): Promise<boolean>;
 
 	/**
 	 * Steps through the files that still have changes to review, and wraps around at either end.

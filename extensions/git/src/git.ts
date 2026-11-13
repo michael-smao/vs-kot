@@ -2062,19 +2062,26 @@ export class Repository {
 		}
 
 		const treeish = await this.getCommit('HEAD').then(() => 'HEAD', () => '');
-		let mode: string;
+		let mode = '100644';
 		let add: string = '';
 
+		// vs-kot: the mode of the staged version comes first. A file that is new has none in HEAD: staging a part of
+		// it again must not take away that it is executable.
 		try {
-			const details = await this.getObjectDetails(treeish, path);
-			mode = details.mode;
+			mode = (await this.getObjectDetails('', path)).mode;
 		} catch (err) {
 			if (err.gitErrorCode !== GitErrorCodes.UnknownPath) {
 				throw err;
 			}
 
-			mode = '100644';
 			add = '--add';
+			try {
+				mode = (await this.getObjectDetails(treeish, path)).mode;
+			} catch (err) {
+				if (err.gitErrorCode !== GitErrorCodes.UnknownPath) {
+					throw err;
+				}
+			}
 		}
 
 		await this.exec(['update-index', add, '--cacheinfo', mode, hash, relativePath]);

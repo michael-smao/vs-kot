@@ -7,25 +7,22 @@ import './media/changeReview.css';
 
 import { $, append } from '../../../../base/browser/dom.js';
 import { Button } from '../../../../base/browser/ui/button/button.js';
-import { raceTimeout, RunOnceScheduler, Sequencer } from '../../../../base/common/async.js';
+import { raceTimeout, RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { hash } from '../../../../base/common/hash.js';
-import { Disposable, DisposableStore, IReference, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { Schemas } from '../../../../base/common/network.js';
+import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { isEqual } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ICodeEditor, IOverlayWidget, IOverlayWidgetPosition } from '../../../../editor/browser/editorBrowser.js';
+import { StableEditorScrollState } from '../../../../editor/browser/stableEditorScroll.js';
 import { EmbeddedCodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/embeddedCodeEditorWidget.js';
 import { LineSource, renderLines, RenderOptions } from '../../../../editor/browser/widget/diffEditor/components/diffEditorViewZones/renderLines.js';
 import { EditorOption } from '../../../../editor/common/config/editorOptions.js';
 import { Range } from '../../../../editor/common/core/range.js';
 import { DetailedLineRangeMapping, LineRangeMapping } from '../../../../editor/common/diff/rangeMapping.js';
 import { IEditorContribution, IEditorDecorationsCollection } from '../../../../editor/common/editorCommon.js';
-import { ILanguageService } from '../../../../editor/common/languages/language.js';
 import { IModelDeltaDecoration, ITextModel } from '../../../../editor/common/model.js';
 import { ModelDecorationOptions } from '../../../../editor/common/model/textModel.js';
-import { IEditorWorkerService } from '../../../../editor/common/services/editorWorker.js';
-import { IModelService } from '../../../../editor/common/services/model.js';
 import { InlineDecoration, InlineDecorationType } from '../../../../editor/common/viewModel/inlineDecorations.js';
 import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
@@ -36,25 +33,24 @@ import { ILabelService } from '../../../../platform/label/common/label.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultStyles.js';
-import { diffInserted, diffInsertedLine, diffRemoved, diffRemovedLine, registerColor } from '../../../../platform/theme/common/colorRegistry.js';
+import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
-import { IQuickDiffModelService, QuickDiffModel } from '../../scm/browser/quickDiffModel.js';
 import { CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, ChangeReviewCommandId, ChangeReviewFileKind, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewEditor, IChangeReviewService } from '../common/changeReview.js';
+import { IChangeReviewFilesService, ReviewedFile } from './changeReviewedFile.js';
 
 // --- colors: brighter than the diff editor's, since here they sit inside the code that is being read
 
 registerColor('changeReview.addedLineBackground',
-	{ dark: '#3ddc8440', light: '#2db66a40', hcDark: diffInsertedLine, hcLight: diffInsertedLine },
+	{ dark: '#3ddc8440', light: '#2db66a40', hcDark: '#3ddc8440', hcLight: '#2db66a40' },
 	localize('changeReview.addedLineBackground', "Background color of lines that an unreviewed change added."));
 registerColor('changeReview.addedTextBackground',
-	{ dark: '#3ddc8470', light: '#2db66a70', hcDark: diffInserted, hcLight: diffInserted },
+	{ dark: '#3ddc8470', light: '#2db66a70', hcDark: '#3ddc8470', hcLight: '#2db66a70' },
 	localize('changeReview.addedTextBackground', "Background color of the text that an unreviewed change added inside a line."));
 registerColor('changeReview.removedLineBackground',
-	{ dark: '#ff5a5a47', light: '#f0484840', hcDark: diffRemovedLine, hcLight: diffRemovedLine },
+	{ dark: '#ff5a5a47', light: '#f0484840', hcDark: '#ff5a5a47', hcLight: '#f0484840' },
 	localize('changeReview.removedLineBackground', "Background color of lines that an unreviewed change removed."));
 registerColor('changeReview.removedTextBackground',
-	{ dark: '#ff5a5a80', light: '#f0484870', hcDark: diffRemoved, hcLight: diffRemoved },
+	{ dark: '#ff5a5a80', light: '#f0484870', hcDark: '#ff5a5a80', hcLight: '#f0484870' },
 	localize('changeReview.removedTextBackground', "Background color of the text that an unreviewed change removed inside a line."));
 
 const addedLineDecoration = ModelDecorationOptions.register({
@@ -77,12 +73,19 @@ const REMOVED_TEXT_CLASS_NAME = 'change-review-text-removed';
 /** Removed lines stack above the first line of their change, behind anything else that sits there. */
 const REMOVED_ZONE_ORDINAL = 10000;
 const WHOLE_FILE_KEY = 'file';
+/** A removed block shows this many lines at most. Thousands of them would be built and laid out for nothing. */
+const MAX_REMOVED_LINES_SHOWN = 300;
+/** How long a file may be listed by git as changed with nothing to show for it, before it is offered as a whole. */
+const WHOLE_FILE_FALLBACK_MS = 4000;
 
 interface IReviewHunk {
 	/** Identifies the change by its content, so a flag survives line shifts but not a rewrite. */
 	readonly key: string;
-	/** What is reviewed as a whole, or `undefined` for a single change inside a modified file. */
-	readonly wholeFile: ChangeReviewFileKind.Added | ChangeReviewFileKind.Deleted | undefined;
+	/**
+	 * What is reviewed as a whole, or `undefined` for a single change inside a modified file. A modified file is
+	 * reviewed as a whole when git lists it as changed but no line of it can be shown as changed.
+	 */
+	readonly wholeFile: ChangeReviewFileKind | undefined;
 	/** Which lines of the reviewed version became which lines of the file. */
 	readonly mapping: LineRangeMapping | undefined;
 	/** The first editor line of the change. For removed lines: the line that follows them. */
@@ -109,7 +112,6 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	}
 
 	private readonly _modelStore = this._register(new DisposableStore());
-	private readonly _quickDiffModel = this._register(new MutableDisposable<IReference<QuickDiffModel>>());
 	private readonly _widgetStore = this._register(new DisposableStore());
 	private readonly _bar = this._register(new MutableDisposable<ChangeReviewBarWidget>());
 	private readonly _decorations: IEditorDecorationsCollection;
@@ -118,27 +120,21 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 	private _hunks: IReviewHunk[] = [];
 
-	/** The staged version of the file as git serves it. It follows a change of the index with some delay. */
-	private _index: ITextModel | undefined;
-	private readonly _indexListener = this._register(new MutableDisposable());
 	/**
-	 * The reviewed version of the file: what the changes are computed against. It is the staged version, plus
-	 * what was approved here a moment ago and is still on its way into git. That makes approving instant, and
-	 * a second approval never builds on a staged version that does not have the first one yet.
+	 * The reviewed version of the file, and what differs from it. It belongs to the file, not to this editor:
+	 * see {@link ReviewedFile}.
 	 */
-	private readonly _baseline = this._register(new MutableDisposable<ITextModel>());
-	private readonly _baselineListener = this._register(new MutableDisposable());
-	/** What git was asked to stage. Until it serves that, its staged version is behind and is not taken over. */
-	private _expectedIndex: string | undefined;
-	/** If git never serves what it was asked to stage, staging failed: go back to what it does serve. */
-	private readonly _giveUpExpectedIndex = this._register(new RunOnceScheduler(() => this._adoptIndex(), 8000));
-	private readonly _stageSequencer = new Sequencer();
-
-	private _mappings: readonly LineRangeMapping[] = [];
-	/** The versions of the reviewed version and of the file that {@link _mappings} were computed for. */
-	private _diffVersions: { readonly baseline: number; readonly model: number } | undefined;
-	private _diffRequestId = 0;
-	private readonly _diffScheduler = this._register(new RunOnceScheduler(() => this._computeDiff(), 100));
+	private _reviewed: ReviewedFile | undefined;
+	/** Which changes are drawn right now, and where. Drawing the same again would only make the editor flicker. */
+	private _renderedSignature: string | undefined;
+	/**
+	 * Git lists a file as changed although no line of it is, or serves no staged text of it: its mode or its line
+	 * endings changed, or it is a link. If that stays so, there is still something to approve: the file as a whole.
+	 */
+	private readonly _wholeFileFallback = this._register(new RunOnceScheduler(() => this._showAsWholeFile(), WHOLE_FILE_FALLBACK_MS));
+	private _isShownAsWholeFile = false;
+	/** A file that is reviewed as a whole grows and shrinks while it is written: its extent is taken anew then. */
+	private readonly _wholeFileRefresh = this._register(new RunOnceScheduler(() => this._update(), 150));
 	/** How many lines each change removed. They are shown above the change and take up room there. */
 	private _removedHeights = new Map<IReviewHunk, number>();
 	/** Whether {@link _hunks} are the computed changes of a file, and not just "nothing yet". */
@@ -158,8 +154,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	constructor(
 		private readonly _editor: ICodeEditor,
 		@IChangeReviewService private readonly _service: IChangeReviewService,
-		@IQuickDiffModelService private readonly _quickDiffModelService: IQuickDiffModelService,
-		@ITextFileService textFileService: ITextFileService,
+		@IChangeReviewFilesService private readonly _filesService: IChangeReviewFilesService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@ICommandService private readonly _commandService: ICommandService,
 		@IClipboardService private readonly _clipboardService: IClipboardService,
@@ -167,9 +162,6 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		@INotificationService private readonly _notificationService: INotificationService,
 		@ILabelService private readonly _labelService: ILabelService,
 		@IKeybindingService private readonly _keybindingService: IKeybindingService,
-		@IEditorWorkerService private readonly _editorWorkerService: IEditorWorkerService,
-		@IModelService private readonly _modelService: IModelService,
-		@ILanguageService private readonly _languageService: ILanguageService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 	) {
 		super();
@@ -187,11 +179,9 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			this._bar.value?.layout();
 		}));
 		this._register(this._service.onDidChange(() => this._onDidChangeService()));
-		this._register(textFileService.files.onDidResolve(e => {
-			// The diff against the staged version only exists for a loaded file
-			const model = this._editor.getModel();
-			if (model && !this._quickDiffModel.value && isEqual(e.model.resource, model.uri)) {
-				this._acquireQuickDiffModel(model);
+		this._register(this._editor.onDidChangeConfiguration(e => {
+			if (e.hasChanged(EditorOption.fontInfo) || e.hasChanged(EditorOption.lineHeight) || e.hasChanged(EditorOption.wrappingInfo)) {
+				this._redraw(); // the removed lines are drawn here, not by the editor: with the old font otherwise
 			}
 		}));
 		this._register(toDisposable(() => this._clearRendering()));
@@ -203,11 +193,12 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 	private _onDidChangeModel(): void {
 		this._modelStore.clear();
-		this._quickDiffModel.clear();
+		this._reviewed = undefined;
 		this._hunks = [];
-		this._index = undefined;
-		this._indexListener.clear();
-		this._clearBaseline();
+		this._renderedSignature = undefined;
+		this._wholeFileFallback.cancel();
+		this._wholeFileRefresh.cancel();
+		this._isShownAsWholeFile = false;
 		this._isKnown = false;
 		this._lastPendingCount = undefined;
 		this._revealWhenKnown = false;
@@ -222,146 +213,47 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			return;
 		}
 
-		this._modelStore.add(model.onDidChangeContent(() => this._diffScheduler.schedule()));
+		this._modelStore.add(model.onDidChangeContent(() => {
+			if (this._hunks[0]?.wholeFile !== undefined) {
+				this._wholeFileRefresh.schedule();
+			}
+		}));
+		this._modelStore.add(model.onDidChangeOptions(() => this._redraw())); // the tab size
 		this._serviceSignature = this._getServiceSignature(model);
-		this._acquireQuickDiffModel(model);
 		this._update();
 		// A file that is still to be reviewed has its bar right away, see _getBarState
 		this._updateBar();
 	}
 
-	private _acquireQuickDiffModel(model: ITextModel): void {
-		if (model.uri.scheme !== Schemas.file && model.uri.scheme !== Schemas.vscodeRemote) {
-			return;
-		}
-
-		const reference = this._quickDiffModelService.createQuickDiffModelReference(model.uri);
-		if (!reference) {
-			return;
-		}
-
-		this._quickDiffModel.value = reference;
-		this._modelStore.add(reference.object.onDidChange(() => this._syncIndex()));
-		this._syncIndex();
-	}
-
-	// --- the reviewed version of a modified file, and its changes
-
-	/** Git says through the quick diff which resource holds the staged version of the file. */
-	private _syncIndex(): void {
-		const quickDiffModel = this._quickDiffModel.value?.object;
-		const primaryQuickDiff = quickDiffModel?.quickDiffs.find(quickDiff => quickDiff.kind === 'primary');
-		const index = primaryQuickDiff ? quickDiffModel?.getDiffEditorModel(primaryQuickDiff.originalResource)?.original : undefined;
-
-		if (index !== this._index) {
-			this._index = index;
-			this._indexListener.value = index?.onDidChangeContent(() => this._onDidChangeIndex());
-		}
-		this._onDidChangeIndex();
-	}
-
-	private _onDidChangeIndex(): void {
-		const model = this._editor.getModel();
-		const index = this._index;
-		if (!model || !index || index.isDisposed()) {
-			// No staged version: the file is new, not in a repository, or not known yet
-			if (this._baseline.value) {
-				this._clearBaseline();
-				this._update();
+	/**
+	 * The reviewed version of the file is only asked for by an editor that shows the review. A diff editor or a
+	 * peek does not, and neither does anything while the review is switched off: nothing is computed for them.
+	 */
+	private _ensureReviewed(model: ITextModel): ReviewedFile | undefined {
+		if (!this._reviewed && this._isReviewEditor()) {
+			this._reviewed = this._filesService.get(model);
+			if (this._reviewed) {
+				this._modelStore.add(this._reviewed.onDidChange(() => this._update()));
 			}
-			return;
 		}
-
-		const contents = index.getValue();
-		if (this._expectedIndex !== undefined) {
-			if (contents !== this._expectedIndex) {
-				return; // git has not caught up with what was approved here
-			}
-			this._expectedIndex = undefined;
-			this._giveUpExpectedIndex.cancel();
-		}
-
-		const baseline = this._baseline.value;
-		if (!baseline) {
-			const language = this._languageService.createById(model.getLanguageId());
-			const created = this._modelService.createModel(contents, language, undefined, true);
-			this._baseline.value = created;
-			this._baselineListener.value = created.onDidChangeContent(() => this._computeDiff());
-			this._computeDiff();
-		} else if (baseline.getValue() !== contents) {
-			baseline.setValue(contents);
-		}
+		return this._reviewed;
 	}
 
-	/** Takes the staged version as git serves it, whatever was expected of it. */
-	private _adoptIndex(): void {
-		this._expectedIndex = undefined;
-		this._giveUpExpectedIndex.cancel();
-		this._onDidChangeIndex();
-	}
-
-	private _clearBaseline(): void {
-		this._baselineListener.clear();
-		this._baseline.clear();
-		this._expectedIndex = undefined;
-		this._giveUpExpectedIndex.cancel();
-		this._diffScheduler.cancel();
-		this._diffRequestId++;
-		this._mappings = [];
-		this._diffVersions = undefined;
-	}
-
-	private async _computeDiff(): Promise<void> {
-		const model = this._editor.getModel();
-		const baseline = this._baseline.value;
-		if (!model || !baseline) {
-			return;
-		}
-
-		this._diffScheduler.cancel();
-		const requestId = ++this._diffRequestId;
-		const versions = { baseline: baseline.getVersionId(), model: model.getVersionId() };
-		const result = await this._editorWorkerService.computeDiff(baseline.uri, model.uri, { ignoreTrimWhitespace: false, maxComputationTimeMs: 2000, computeMoves: false }, 'advanced');
-
-		// Outdated when anything moved on in the meantime. Whatever moved on has asked for a new diff.
-		if (requestId !== this._diffRequestId || this._baseline.value !== baseline || this._editor.getModel() !== model
-			|| baseline.getVersionId() !== versions.baseline || model.getVersionId() !== versions.model) {
-			return;
-		}
-
-		this._mappings = result?.changes ?? [];
-		this._diffVersions = versions;
+	/** Draws everything anew, although the changes are the same. */
+	private _redraw(): void {
+		this._renderedSignature = undefined;
 		this._update();
 	}
 
-	/**
-	 * Approves changes of a modified file: they become part of the reviewed version right away,
-	 * and git is asked to stage that version.
-	 */
-	private _stage(model: ITextModel, hunks: readonly IReviewHunk[]): boolean {
-		const baseline = this._baseline.value;
+	private _showAsWholeFile(): void {
+		this._isShownAsWholeFile = true;
+		this._update();
+	}
+
+	/** Approves changes of a modified file: they become part of its reviewed version, which git is asked to stage. */
+	private _approve(hunks: readonly IReviewHunk[]): boolean {
 		const mappings = hunks.map(hunk => hunk.mapping).filter(mapping => !!mapping);
-		if (!baseline || mappings.length === 0 || this._diffVersions?.baseline !== baseline.getVersionId() || this._diffVersions.model !== model.getVersionId()) {
-			return false; // what is shown is about to be replaced by a newer diff
-		}
-
-		const baselineLines = baseline.getLinesContent();
-		const modelLines = model.getLinesContent();
-		baseline.applyEdits(mappings.map(mapping => {
-			const rangeMapping = mapping.toRangeMapping2(baselineLines, modelLines);
-			return { range: rangeMapping.originalRange, text: model.getValueInRange(rangeMapping.modifiedRange) };
-		}));
-
-		const contents = baseline.getValue();
-		this._expectedIndex = contents;
-		this._giveUpExpectedIndex.schedule();
-		this._stageSequencer.queue(() => this._commandService.executeCommand('git.stageContent', model.uri, contents)).catch(() => {
-			if (this._editor.getModel() === model) {
-				this._adoptIndex(); // it did not get staged: show the changes again
-			}
-		});
-
-		return true;
+		return !!this._reviewed?.approve(mappings);
 	}
 
 	/** Everything the service knows that changes which changes this editor shows. */
@@ -383,7 +275,26 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			this._serviceSignature = signature;
 			this._update();
 		} else {
+			this._reportPendingCount(model);
 			this._updateBar(); // it also shows how many files are left
+		}
+	}
+
+	/**
+	 * Tells the service how many changes of this file are still open. The service forgets that whenever the file
+	 * is written, which also happens when the reviewer saves what they wrote themselves.
+	 */
+	private _reportPendingCount(model: ITextModel): void {
+		const file = this._service.getFile(model.uri);
+		if (!file || !this._isKnown) {
+			return;
+		}
+
+		this._isUpdating = true;
+		try {
+			this._service.setPendingCount(file.uri, this._getPendingHunks().length);
+		} finally {
+			this._isUpdating = false;
 		}
 	}
 
@@ -409,34 +320,67 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			return;
 		}
 
-		// A new or a deleted file is reviewed as a whole
+		const reviewed = this._ensureReviewed(model);
 		const file = this._service.getFile(model.uri);
+		const wholeFile = (kind: ChangeReviewFileKind): IReviewHunk[] => [{
+			key: WHOLE_FILE_KEY,
+			wholeFile: kind,
+			mapping: undefined,
+			startLineNumber: 1,
+			endLineNumber: model.getLineCount(),
+			flagged: this._service.hasRequest(file?.uri ?? model.uri, WHOLE_FILE_KEY)
+		}];
+
+		// A new or a deleted file is reviewed as a whole
 		if (file && file.kind !== ChangeReviewFileKind.Modified) {
-			this._setHunks(model, [{
-				key: WHOLE_FILE_KEY,
-				wholeFile: file.kind,
-				mapping: undefined,
-				startLineNumber: 1,
-				endLineNumber: model.getLineCount(),
-				flagged: this._service.hasRequest(file.uri, WHOLE_FILE_KEY)
-			}], true);
+			this._wholeFileFallback.cancel();
+			this._isShownAsWholeFile = false;
+
+			// Unless it is a new file that the reviewer wrote here themselves: there is nothing to review in that
+			if (file.kind === ChangeReviewFileKind.Added && reviewed?.baseline) {
+				if (!reviewed.isCurrent) {
+					return; // what differs from what the reviewer wrote is being computed
+				}
+				if (reviewed.mappings.length === 0) {
+					this._setHunks(model, [], true);
+					return;
+				}
+			}
+
+			this._setHunks(model, wholeFile(file.kind), true);
 			return;
 		}
 
 		// A modified file is reviewed change by change, against its reviewed version
-		const baseline = this._baseline.value;
-		if (!baseline) {
+		const baseline = reviewed?.baseline;
+		const hasNothingToShow = !reviewed || !baseline || (reviewed.isCurrent && reviewed.mappings.length === 0);
+		if (file && hasNothingToShow && !reviewed?.isStagePending) {
+			// Git lists the file as changed, and yet no line of it is. Right after an approval that is only git
+			// being behind. Otherwise there is something that cannot be shown: see _wholeFileFallback.
+			if (this._isShownAsWholeFile) {
+				this._setHunks(model, wholeFile(ChangeReviewFileKind.Modified), true);
+				return;
+			}
+			if (!this._wholeFileFallback.isScheduled()) {
+				this._wholeFileFallback.schedule();
+			}
+		} else {
+			this._wholeFileFallback.cancel();
+			this._isShownAsWholeFile = false;
+		}
+
+		if (!reviewed || !baseline) {
 			this._setHunks(model, [], false);
 			return;
 		}
-		if (this._diffVersions?.baseline !== baseline.getVersionId() || this._diffVersions.model !== model.getVersionId()) {
-			return; // the diff for what the editor shows right now is on its way
+		if (!reviewed.isCurrent) {
+			return; // the changes for what the editor shows right now are on their way
 		}
 
 		const fileUri = this._getFileUri(model);
 		const lineCount = model.getLineCount();
 		const occurrences = new Map<string, number>();
-		const hunks = this._mappings.map((mapping): IReviewHunk => {
+		const hunks = reviewed.mappings.map((mapping): IReviewHunk => {
 			const originalText = mapping.original.mapToLineArray(lineNumber => baseline.getLineContent(lineNumber)).join('\n');
 			const modifiedText = mapping.modified.mapToLineArray(lineNumber => model.getLineContent(lineNumber)).join('\n');
 			const contentHash = hash([originalText, modifiedText]).toString(36);
@@ -459,14 +403,26 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	}
 
 	private _setHunks(model: ITextModel, hunks: IReviewHunk[], isKnown: boolean): void {
-		this._hunks = hunks;
+		// Drawing takes down and puts up every removed block and every widget. Changes that are drawn already, at
+		// the same lines, are left alone: they are computed again after every edit, and nothing should flicker then.
+		const signature = hunks.map(hunk => `${hunk.key}@${hunk.startLineNumber}-${hunk.endLineNumber}${hunk.flagged ? '!' : ''}${hunk.wholeFile ?? ''}`).join(' ');
+		const isDrawn = signature === this._renderedSignature;
+		if (!isDrawn) {
+			this._hunks = hunks; // the widgets belong to these objects: keep the drawn ones otherwise
+		}
 		this._isKnown = isKnown;
 
 		const pendingCount = hunks.filter(hunk => !hunk.flagged).length;
 		this._ctxHasChanges.set(hunks.length > 0);
 		this._ctxHasPendingChanges.set(pendingCount > 0);
 
-		this._render(model);
+		if (!isDrawn) {
+			this._renderedSignature = signature;
+			this._render(model);
+		}
+		if (hunks.length === 0) {
+			this._ctxCursorInChange.set(false); // or the keys of a change would stay taken where there is none anymore
+		}
 
 		if (!isKnown) {
 			return;
@@ -492,11 +448,17 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		this._onDidComputeHunks.fire();
 
 		if (pendingCount === 0) {
+			if (this._revealWhenKnown) {
+				// The reviewer was taken here for changes, and there are none to decide about: on to the next file
+				this._revealWhenKnown = false;
+				this._service.revealNextFile(this._getFileUri(model));
+			}
 			return;
 		}
 
-		// New changes showed up in a file that was done: jump to them, unless the reviewer is typing there
-		const hasNewChanges = previousPendingCount === 0 && this._service.autoReveal
+		// New changes showed up in a file that was done: jump to them, unless the reviewer is typing there.
+		// Only changes that came from outside count: the reviewer's own edits are not news to them.
+		const hasNewChanges = previousPendingCount === 0 && this._service.autoReveal && (this._reviewed?.isLastChangeFromOutside ?? true)
 			&& this._editorService.activeTextEditorControl === this._editor && !this._getHunkAtCursor();
 		if (this._revealWhenKnown || hasNewChanges) {
 			this._revealWhenKnown = false;
@@ -524,7 +486,12 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		}
 		const lineNumber = this._editor.getPosition()?.lineNumber ?? 1;
 		const pending = this._getPendingHunks();
-		return pending.find(hunk => hunk.startLineNumber > lineNumber) ?? pending[0];
+		return pending.find(hunk => this._getRevealLine(hunk) > lineNumber) ?? pending[0];
+	}
+
+	/** The line the cursor is put on for a change. Lines removed at the very end of the file belong to a line that is not there. */
+	private _getRevealLine(hunk: IReviewHunk): number {
+		return Math.min(hunk.startLineNumber, this._editor.getModel()?.getLineCount() ?? hunk.startLineNumber);
 	}
 
 	private _updateCursorState(): void {
@@ -568,9 +535,28 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		this._widgetStore.clear();
 		this._removedHeights = new Map();
 
-		const original = this._baseline.value;
+		const original = this._reviewed?.baseline;
 		const lineCount = model.getLineCount();
 		const decorations: IModelDeltaDecoration[] = [];
+
+		// The removed blocks take up room above what the reviewer is looking at: keep that where it is
+		const scrollState = StableEditorScrollState.capture(this._editor);
+
+		// Where the removed lines wrap, when the editor wraps lines
+		const lineBreaksComputer = original ? this._editor._getViewModel()?.createLineBreaksComputer({
+			getLineContent: lineNumber => original.getLineContent(lineNumber),
+			getLineInjectedText: () => null
+		}) : undefined;
+		const shownRemovedLines = (hunk: IReviewHunk) => hunk.mapping ? Math.min(hunk.mapping.original.length, MAX_REMOVED_LINES_SHOWN) : 0;
+		if (lineBreaksComputer) {
+			for (const hunk of this._hunks) {
+				for (let index = 0; hunk.mapping && index < shownRemovedLines(hunk); index++) {
+					lineBreaksComputer.addRequest(hunk.mapping.original.startLineNumber + index, null);
+				}
+			}
+		}
+		const lineBreaks = lineBreaksComputer?.finalize() ?? [];
+		let lineBreakIndex = 0;
 
 		this._editor.changeViewZones(accessor => {
 			for (const id of this._viewZoneIds) {
@@ -584,10 +570,12 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 				const mapping = hunk.mapping;
 
 				if (hunk.wholeFile !== undefined) {
-					decorations.push({
-						range: new Range(1, 1, lineCount, model.getLineMaxColumn(lineCount)),
-						options: hunk.wholeFile === ChangeReviewFileKind.Added ? addedLineDecoration : removedLineDecoration
-					});
+					if (hunk.wholeFile !== ChangeReviewFileKind.Modified) {
+						decorations.push({
+							range: new Range(1, 1, lineCount, model.getLineMaxColumn(lineCount)),
+							options: hunk.wholeFile === ChangeReviewFileKind.Added ? addedLineDecoration : removedLineDecoration
+						});
+					}
 					continue;
 				}
 
@@ -610,15 +598,18 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 				// Removed lines are not part of the file anymore: show them in red above
 				if (!mapping.original.isEmpty) {
-					original.tokenization.forceTokenization(mapping.original.endLineNumberExclusive - 1);
+					const shownLineCount = shownRemovedLines(hunk);
+					const firstLine = mapping.original.startLineNumber;
+					const shownLines = Array.from({ length: shownLineCount }, (_, index) => firstLine + index);
+					original.tokenization.forceTokenization(firstLine + shownLineCount - 1);
 					const source = new LineSource(
-						mapping.original.mapToLineArray(lineNumber => original.tokenization.getLineTokens(lineNumber)),
-						[],
+						shownLines.map(lineNumber => original.tokenization.getLineTokens(lineNumber)),
+						shownLines.map(() => lineBreaks[lineBreakIndex++] ?? null),
 						original.mightContainNonBasicASCII(),
 						original.mightContainRTL()
 					);
 					const inlineDecorations = innerChanges
-						.filter(innerChange => !innerChange.originalRange.isEmpty())
+						.filter(innerChange => !innerChange.originalRange.isEmpty() && innerChange.originalRange.endLineNumber < firstLine + shownLineCount)
 						.map(innerChange => new InlineDecoration(
 							innerChange.originalRange.delta(-(mapping.original.startLineNumber - 1)),
 							REMOVED_TEXT_CLASS_NAME,
@@ -627,11 +618,18 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 					const domNode = $('.change-review-removed-zone.view-lines.monaco-mouse-cursor-text');
 					const result = renderLines(source, renderOptions, inlineDecorations, domNode);
-					this._removedHeights.set(hunk, result.heightInLines);
+					let heightInLines = result.heightInLines;
+					if (shownLineCount < mapping.original.length) {
+						append(domNode, $('.change-review-removed-more', undefined, localize('moreRemovedLines', "{0} more removed lines", mapping.original.length - shownLineCount)));
+						heightInLines++;
+					}
+					this._removedHeights.set(hunk, heightInLines);
 
 					this._viewZoneIds.push(accessor.addZone({
 						afterLineNumber: Math.min(hunk.startLineNumber - 1, lineCount),
-						heightInLines: result.heightInLines,
+						heightInLines,
+						// so that a long removed line can be scrolled to, as far as the lines of the file can
+						minWidthInPx: result.minWidthInPx,
 						domNode,
 						ordinal: REMOVED_ZONE_ORDINAL
 					}));
@@ -640,6 +638,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		});
 
 		this._decorations.set(decorations);
+		scrollState.restore(this._editor);
 
 		// A file that is reviewed as a whole has its buttons in the bar, a single change has them right below it
 		this._widgets = this._hunks
@@ -765,7 +764,8 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		if (wholeFile) {
 			changeLabel = wholeFile.flagged ? localize('changeRequested', "Change Requested")
 				: wholeFile.wholeFile === ChangeReviewFileKind.Added ? localize('newFile', "New File")
-					: localize('deletedFile', "Deleted File");
+					: wholeFile.wholeFile === ChangeReviewFileKind.Deleted ? localize('deletedFile', "Deleted File")
+						: localize('changedFile', "Changed, No Lines to Show");
 		} else if (isLoading) {
 			changeLabel = '';
 		} else {
@@ -815,7 +815,9 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		if (first) {
 			this._reveal(first);
 		} else if (this._service.getFile(model.uri)) {
+			// Nothing to decide about in this file after all: say so, and go on to the next one
 			this._service.setPendingCount(this._getFileUri(model), 0);
+			this._service.revealNextFile(this._getFileUri(model));
 		}
 	}
 
@@ -863,6 +865,17 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		}
 	}
 
+	/** The change with a key, once the changes are computed for what the editor shows now. */
+	private async _waitForHunk(key: string): Promise<IReviewHunk | undefined> {
+		const store = new DisposableStore();
+		try {
+			await raceTimeout(new Promise<void>(resolve => store.add(this._onDidComputeHunks.event(() => resolve()))), 2000);
+		} finally {
+			store.dispose();
+		}
+		return this._reviewed?.isCurrent ? this._hunks.find(hunk => hunk.key === key) : undefined;
+	}
+
 	/** After a decision the review moves on: to the next change below, or else to the next file. */
 	private _advanceAfter(model: ITextModel, afterLine: number): void {
 		if (this._editor.getModel() !== model) {
@@ -887,7 +900,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 		const lineNumber = this._editor.getPosition()?.lineNumber ?? 1;
 		const pending = this._getPendingHunks();
-		const next = pending.find(hunk => hunk.startLineNumber > lineNumber);
+		const next = pending.find(hunk => this._getRevealLine(hunk) > lineNumber);
 		if (next) {
 			this._reveal(next);
 			this._editor.focus();
@@ -940,8 +953,17 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			return;
 		}
 
+		if (this._reviewed && !this._reviewed.isCurrent) {
+			// The changes are being computed anew, after an edit. The click was made on this change: wait for it.
+			const key = hunk.key;
+			hunk = await this._waitForHunk(key);
+			if (!hunk || this._editor.getModel() !== model) {
+				return;
+			}
+		}
+
 		const hunkCountBefore = this._hunks.length;
-		if (this._stage(model, [hunk]) && await this._waitForFewerHunks(hunkCountBefore)) {
+		if (this._approve([hunk]) && await this._waitForFewerHunks(hunkCountBefore)) {
 			this._advanceAfter(model, hunk.startLineNumber);
 		}
 	}
@@ -961,7 +983,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 		this._editor.focus();
 		const hunkCountBefore = this._hunks.length;
-		if (this._stage(model, this._getPendingHunks()) && await this._waitForFewerHunks(hunkCountBefore) && this._editor.getModel() === model) {
+		if (this._approve(this._getPendingHunks()) && await this._waitForFewerHunks(hunkCountBefore) && this._editor.getModel() === model) {
 			await this._service.revealNextFile(this._getFileUri(model));
 		}
 	}
@@ -1015,13 +1037,16 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		if (hunk.wholeFile === ChangeReviewFileKind.Deleted) {
 			return localize('describeDeleted', "I don't like that {0} was deleted.", path);
 		}
+		if (hunk.wholeFile === ChangeReviewFileKind.Modified) {
+			return localize('describeChanged', "I don't like the change to {0}. Git lists it as changed, but none of its lines is: its mode, its line endings or what it links to.", path);
+		}
 
 		const lines = hunk.startLineNumber === hunk.endLineNumber
 			? localize('describeLine', "line {0}", hunk.startLineNumber)
 			: localize('describeLines', "lines {0}-{1}", hunk.startLineNumber, hunk.endLineNumber);
 
 		const mapping = hunk.mapping;
-		const original = this._baseline.value;
+		const original = this._reviewed?.baseline;
 		const removed = mapping && original ? mapping.original.mapToLineArray(lineNumber => `-${original.getLineContent(lineNumber)}`) : [];
 		const added = mapping ? mapping.modified.mapToLineArray(lineNumber => `+${model.getLineContent(lineNumber)}`) : [];
 
@@ -1051,7 +1076,8 @@ class ChangeReviewHunkWidget extends Disposable implements IOverlayWidget {
 
 	private readonly _domNode: HTMLElement;
 	private _position: IOverlayWidgetPosition | null = null;
-	private _width: number | undefined;
+	private _width = 0;
+	private _isInView: boolean | undefined;
 
 	constructor(
 		private readonly _editor: ICodeEditor,
@@ -1114,11 +1140,23 @@ class ChangeReviewHunkWidget extends Disposable implements IOverlayWidget {
 			bottom = this._editor.getTopForLineNumber(this.hunk.startLineNumber);
 		}
 
-		this._width ??= this._domNode.offsetWidth;
+		// Scrolling calls this for every change of the file. Only the few in view are measured and placed.
 		const top = bottom - this._editor.getScrollTop();
-		const left = layoutInfo.contentLeft + layoutInfo.contentWidth - layoutInfo.verticalScrollbarWidth - this._width - 12;
+		const isInView = top > -lineHeight && top < layoutInfo.height;
+		if (!isInView) {
+			if (this._isInView !== false) {
+				this._isInView = false;
+				this._domNode.style.visibility = 'hidden';
+			}
+			return;
+		}
 
-		this._domNode.style.visibility = top > -lineHeight && top < layoutInfo.height ? '' : 'hidden';
+		this._isInView = true;
+		this._domNode.style.visibility = '';
+		if (this._width === 0) {
+			this._width = this._domNode.offsetWidth; // zero while the editor itself is hidden: measured again then
+		}
+		const left = layoutInfo.contentLeft + layoutInfo.contentWidth - layoutInfo.verticalScrollbarWidth - this._width - 12;
 		this._position = { preference: { top, left: Math.max(layoutInfo.contentLeft, left) } };
 		this._editor.layoutOverlayWidget(this);
 	}
