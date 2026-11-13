@@ -7,7 +7,10 @@
 // plays the part of Claude Code by running the hooks the way it runs them, and looks at what the review marks.
 // Neither the real settings of Claude Code nor the real record are touched: both are set to folders of this check.
 //
-//   node .vs-kot/release-check/claude-record.ts
+//   node .vs-kot/release-check/claude-record.ts                                                   (source build)
+//   PACKAGED_APP=../VSCode-darwin-arm64/vs-kot.app node .vs-kot/release-check/claude-record.ts     (the app)
+//
+// The profile for the app's run is kept under .build/, like the one of check.ts.
 
 import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
@@ -19,7 +22,8 @@ const home = path.join(scratch, 'claude-record');
 const ws = path.join(home, 'ws');
 const settingsFile = path.join(home, 'claude', 'settings.json');
 const record = path.join(home, 'record');
-const root = path.join(repo, '.vs-kot', 'tp'); const ud = path.join(root, 'ud');
+const packagedApp = process.env.PACKAGED_APP;
+const root = packagedApp ? path.join(repo, '.build', 'pkgtest') : path.join(repo, '.vs-kot', 'tp'); const ud = path.join(root, 'ud');
 const git = (...args: string[]) => cp.execFileSync('git', args, { cwd: ws, encoding: 'utf8' }).trim();
 const file = (name: string) => path.join(ws, 'src', name);
 const read = (name: string) => fs.readFileSync(file(name), 'utf8');
@@ -55,8 +59,9 @@ const events = () => fs.existsSync(path.join(record, 'events')) ? fs.readdirSync
 const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync(path.join(record, 'files')).flatMap(folder => fs.readdirSync(path.join(record, 'files', folder))).length : 0;
 
 (async () => {
-	const env: Record<string, string | undefined> = { ...process.env, NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1', ...getIsolatedModelServer() }; delete env.ELECTRON_RUN_AS_NODE;
-	const app = await _electron.launch({ executablePath: path.join(repo, '.build', 'electron', 'vs-kot.app', 'Contents', 'MacOS', 'vs-kot'), args: [repo, ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, '--disable-extension=vs-kot.tab-completion', '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain'], env, timeout: 120000 });
+	const env: Record<string, string | undefined> = { ...process.env, ...getIsolatedModelServer() }; delete env.ELECTRON_RUN_AS_NODE;
+	if (packagedApp) { delete env.VSCODE_DEV; delete env.NODE_ENV; delete env.VSCODE_CLI; } else { Object.assign(env, { NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1' }); }
+	const app = await _electron.launch({ executablePath: packagedApp ? path.join(packagedApp, 'Contents', 'MacOS', 'vs-kot') : path.join(repo, '.build', 'electron', 'vs-kot.app', 'Contents', 'MacOS', 'vs-kot'), args: [...(packagedApp ? [] : [repo]), ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, '--disable-extension=vs-kot.tab-completion', '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain'], env, timeout: 120000 });
 	try {
 		const page = await app.firstWindow({ timeout: 120000 });
 		await page.waitForSelector('.monaco-workbench', { timeout: 120000 }); await page.waitForTimeout(9000);
