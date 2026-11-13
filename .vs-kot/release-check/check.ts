@@ -39,6 +39,9 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 		const wanted = ['esbenp.prettier-vscode', 'formulahendry.auto-close-tag', 'formulahendry.auto-rename-tag', 'dsznajder.es7-react-js-snippets', 'vs-kot-tab-completion'];
 		check('team extensions are inside the app', wanted.every(w => ext.some(e => e.startsWith(w))), wanted.filter(w => !ext.some(e => e.startsWith(w))).join(', ') || `${ext.length} built-in extensions`);
 		check('the Copilot extension is not inside the app', !ext.some(e => /copilot/i.test(e)));
+		// the updater itself is checked by update-check.ts; here only that the app is set up to use it
+		const product = JSON.parse(fs.readFileSync(path.join(packagedApp, 'Contents', 'Resources', 'app', 'product.json'), 'utf8'));
+		check('the app knows its release number and where updates come from', /^\d+\.\d+\.\d+$/.test(product.vsKotVersion ?? '') && /^https:\/\/.+\/releases\/latest\/download$/.test(product.updateUrl ?? ''), `${product.vsKotVersion} from ${product.updateUrl}`);
 	}
 	const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 	if (packagedApp) { delete env.VSCODE_DEV; delete env.NODE_ENV; delete env.VSCODE_CLI; } else { Object.assign(env, { NODE_ENV: 'development', VSCODE_DEV: '1', VSCODE_CLI: '1' }); }

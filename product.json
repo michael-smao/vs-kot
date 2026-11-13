@@ -1,5 +1,5 @@
 {
-	"//": "vs-kot: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsKotManagedSettings (locked settings), vsKotDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets). The default for editor.quickSuggestions is the classic one: with upstream's newer default the editor drops a tab completion that takes longer than 750 ms. editor.suggest.selectionMode is whenQuickSuggestion: right after a trigger character such as a dot the suggestion list selects nothing, so tab completion may propose any member instead of having to continue the first list entry.",
+	"//": "vs-kot: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsKotManagedSettings (locked settings), vsKotDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets). The default for editor.quickSuggestions is the classic one: with upstream's newer default the editor drops a tab completion that takes longer than 750 ms. editor.suggest.selectionMode is whenQuickSuggestion: right after a trigger character such as a dot the suggestion list selects nothing, so tab completion may propose any member instead of having to continue the first list entry. Added for updates: vsKotVersion (our release number; raise it for every release, the tag is v plus this number), updateUrl (where the app looks for latest.json, the file every release carries) and downloadUrl (the page people are sent to when the app cannot replace itself).",
 	"nameShort": "vs-kot",
 	"nameLong": "vs-kot",
 	"applicationName": "vs-kot",
@@ -333,5 +333,8 @@
 			"strings": "off"
 		},
 		"editor.suggest.selectionMode": "whenQuickSuggestion"
-	}
+	},
+	"vsKotVersion": "0.5.0",
+	"updateUrl": "https://github.com/michael-smao/vs-kot/releases/latest/download",
+	"downloadUrl": "https://github.com/michael-smao/vs-kot/releases/latest"
 }

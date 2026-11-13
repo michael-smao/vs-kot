@@ -89,7 +89,7 @@ import { getPiiPathsFromEnvironment, getTelemetryLevel, getUserContentPathsFromE
 import { IUpdateService } from '../../platform/update/common/update.js';
 import { UpdateChannel } from '../../platform/update/common/updateIpc.js';
 import { NotAvailableUpdateDialog } from '../../platform/update/electron-main/notAvailableUpdateDialog.js';
-import { DarwinUpdateService } from '../../platform/update/electron-main/updateService.darwin.js';
+import { VsKotUpdateService } from '../../platform/update/electron-main/vsKotUpdateService.js'; // vs-kot: replaces DarwinUpdateService, see below
 import { LinuxUpdateService } from '../../platform/update/electron-main/updateService.linux.js';
 import { SnapUpdateService } from '../../platform/update/electron-main/updateService.snap.js';
 import { Win32UpdateService } from '../../platform/update/electron-main/updateService.win32.js';
@@ -1247,7 +1247,8 @@ export class CodeApplication extends Disposable {
 				break;
 
 			case 'darwin':
-				services.set(IUpdateService, new SyncDescriptor(DarwinUpdateService));
+				// vs-kot: upstream's DarwinUpdateService needs an Apple developer signature; ours updates from our own releases.
+				services.set(IUpdateService, new SyncDescriptor(VsKotUpdateService));
 				break;
 		}
 

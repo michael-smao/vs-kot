@@ -127,6 +127,8 @@ export interface IProductConfiguration {
 	readonly vsKotManagedSettings?: IStringDictionary<unknown>;
 	/** vs-kot: the team's default values for settings. Unlike the managed ones they can be changed. */
 	readonly vsKotDefaultSettings?: IStringDictionary<unknown>;
+	/** vs-kot: our own release number, for example `0.5.0`. `version` stays the VS Code version the fork is based on. */
+	readonly vsKotVersion?: string;
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];
 

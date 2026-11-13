@@ -442,7 +442,8 @@ export abstract class AbstractUpdateService extends Disposable implements IUpdat
 		});
 	}
 
-	private getProductQuality(updateMode: string): string | undefined {
+	// vs-kot: was private. Our updater has one release channel and does not read it from product.json.
+	protected getProductQuality(updateMode: string): string | undefined {
 		return updateMode === 'none' ? undefined : this.productService.quality;
 	}
 

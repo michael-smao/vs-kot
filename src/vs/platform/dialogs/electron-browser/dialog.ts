@@ -15,7 +15,8 @@ function formatCopilotVersion(version: string | undefined): string {
 }
 
 export function createNativeAboutDialogDetails(productService: IProductService, osProps: IOSProperties): { title: string; details: string; detailsToCopy: string } {
-	let version = productService.version;
+	// vs-kot: About shows our release number first and the VS Code version it is based on behind it.
+	let version = productService.vsKotVersion ? `${productService.vsKotVersion} (VS Code ${productService.version})` : productService.version;
 	if (productService.target) {
 		version = `${version} (${productService.target} setup)`;
 	} else if (productService.darwinUniversalAssetId) {

@@ -139,7 +139,7 @@ export class UpdateTooltip extends Disposable {
 	}
 
 	private updateCurrentVersion() {
-		const productVersion = this.productService.version;
+		const productVersion = this.productService.vsKotVersion ?? this.productService.version; // vs-kot: our release number, the one updates are compared by
 		if (productVersion) {
 			const currentCommitId = this.productService.commit?.substring(0, 7);
 			this.currentVersionNode.textContent = currentCommitId
