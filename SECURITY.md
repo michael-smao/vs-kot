@@ -1,14 +1,13 @@
-<!-- BEGIN MICROSOFT SECURITY.MD V1.0.0 BLOCK -->
+# Security
 
-## Security
+vs-kot is a fork of Code - OSS that one team builds for its own daily work.
 
-Microsoft takes the security of our software products and services seriously, which
-includes all source code repositories in our GitHub organizations.
+## Reporting a vulnerability
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+Please do not open a public issue for a security problem. Report it privately through [Report a vulnerability](../../security/advisories/new) on the Security tab of this repository.
 
-For security reporting information, locations, contact information, and policies,
-please review the latest guidance for Microsoft repositories at
-[https://aka.ms/SECURITY.md](https://aka.ms/SECURITY.md).
+A problem that also exists in Visual Studio Code itself is upstream's to fix. Report it to Microsoft as their [security policy](https://github.com/microsoft/vscode/security/policy) describes.
 
-<!-- END MICROSOFT SECURITY.MD BLOCK -->
+## What to know about releases
+
+Releases are not signed with an Apple developer certificate. The app updates itself from the releases of this repository and checks every download against the SHA-256 that the release announces before it installs anything.
