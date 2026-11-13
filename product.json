@@ -334,7 +334,7 @@
 		},
 		"editor.suggest.selectionMode": "whenQuickSuggestion"
 	},
-	"vsKotVersion": "0.5.0",
+	"vsKotVersion": "0.5.1",
 	"updateUrl": "https://github.com/michael-smao/vs-kot/releases/latest/download",
 	"downloadUrl": "https://github.com/michael-smao/vs-kot/releases/latest"
 }
