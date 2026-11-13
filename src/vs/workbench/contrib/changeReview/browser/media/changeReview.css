@@ -1,0 +1,116 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* --- what a change added and removed */
+
+.monaco-editor .change-review-line-added {
+	background-color: var(--vscode-changeReview-addedLineBackground);
+}
+
+.monaco-editor .change-review-text-added {
+	background-color: var(--vscode-changeReview-addedTextBackground);
+}
+
+.monaco-editor .change-review-line-removed,
+.monaco-editor .change-review-removed-zone {
+	background-color: var(--vscode-changeReview-removedLineBackground);
+}
+
+.monaco-editor .change-review-text-removed {
+	background-color: var(--vscode-changeReview-removedTextBackground);
+}
+
+/* --- the buttons of one change hang below its bottom right corner, the bar floats at the bottom of the editor */
+
+.monaco-editor .change-review-hunk-widget,
+.monaco-editor .change-review-bar-widget {
+	display: flex;
+	align-items: center;
+	box-sizing: border-box;
+	color: var(--vscode-editorWidget-foreground);
+	background-color: var(--vscode-editorWidget-background);
+	border: 1px solid var(--vscode-editorWidget-border, transparent);
+	box-shadow: var(--vscode-shadow-md);
+	white-space: nowrap;
+}
+
+.monaco-editor .change-review-hunk-widget {
+	gap: 2px;
+	padding: 2px;
+	border-top: none;
+	border-radius: 0 0 6px 6px;
+	opacity: 0.65;
+	transition: opacity 0.1s ease-in-out;
+}
+
+/* The highlighted change is the one the keyboard shortcuts act on: the one at the cursor, or else the next one. */
+.monaco-editor .change-review-hunk-widget.current,
+.monaco-editor .change-review-hunk-widget:hover,
+.monaco-editor .change-review-hunk-widget:focus-within {
+	opacity: 1;
+}
+
+.monaco-editor .change-review-bar-widget {
+	gap: 8px;
+	padding: 4px;
+	border-radius: 8px;
+}
+
+.monaco-editor .change-review-bar-section {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.monaco-editor .change-review-bar-section + .change-review-bar-section {
+	padding-left: 8px;
+	border-left: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
+}
+
+.monaco-editor .change-review-hunk-widget .monaco-button,
+.monaco-editor .change-review-bar-widget .monaco-button {
+	width: auto;
+	padding: 1px 8px;
+	font-size: 11px;
+	line-height: 18px;
+	border-radius: 4px;
+	border-color: transparent !important; /* the button sets its border inline */
+}
+
+.monaco-editor .change-review-bar-widget .monaco-button {
+	line-height: 20px;
+}
+
+/* A quiet second choice next to the one coloured button */
+.monaco-editor .change-review-hunk-widget .monaco-button.secondary,
+.monaco-editor .change-review-bar-widget .monaco-button.secondary {
+	color: var(--vscode-editorWidget-foreground);
+	background-color: transparent;
+}
+
+.monaco-editor .change-review-hunk-widget .monaco-button.secondary:hover,
+.monaco-editor .change-review-bar-widget .monaco-button.secondary:hover:not(.disabled) {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.monaco-editor .change-review-bar-widget .monaco-button.change-review-icon-button {
+	width: 22px;
+	height: 22px;
+	padding: 0;
+}
+
+.monaco-editor .change-review-hunk-widget .change-review-label,
+.monaco-editor .change-review-bar-widget .change-review-label {
+	padding: 0 6px;
+	font-size: 11px;
+	line-height: 18px;
+	color: var(--vscode-descriptionForeground);
+	font-variant-numeric: tabular-nums;
+}
+
+.monaco-editor .change-review-hunk-widget.flagged .change-review-label,
+.monaco-editor .change-review-bar-section.flagged .change-review-label {
+	color: var(--vscode-editorWarning-foreground);
+}

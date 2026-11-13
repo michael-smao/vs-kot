@@ -227,6 +227,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/changeReview",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/contrib/search",
 			"project": "vscode-workbench"
 		},

@@ -288,6 +288,9 @@ import './contrib/scm/browser/scm.contribution.js';
 import './contrib/scm/browser/quickDiff.contribution.js';
 import './contrib/scm/browser/scm.service.contribution.js';
 
+// vs-claude: Change Review
+import './contrib/changeReview/browser/changeReview.contribution.js';
+
 // Debug
 import './contrib/debug/browser/debug.contribution.js';
 import './contrib/debug/browser/debugEditorContribution.js';

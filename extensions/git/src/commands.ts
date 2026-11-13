@@ -1953,6 +1953,20 @@ export class CommandCenter {
 			await repository.stage(resource, result, modifiedDocument.encoding));
 	}
 
+	// vs-claude: stages the given text as the content of a file. The change review of the workbench computes that
+	// text itself, from the staged version it shows, so that it does not depend on how fresh the documents here are.
+	@command('git.stageContent')
+	async stageContent(uri: Uri, contents: string): Promise<void> {
+		if (!uri || uri.scheme !== 'file' || typeof contents !== 'string') {
+			return;
+		}
+
+		const encoding = workspace.textDocuments.find(document => document.uri.toString() === uri.toString())?.encoding ?? 'utf8';
+
+		await this.runByRepository(uri, async (repository, resource) =>
+			await repository.stage(resource, contents, encoding));
+	}
+
 	@command('git.revertChange')
 	async revertChange(uri: Uri, changes: LineChange[], index: number): Promise<void> {
 		if (!uri) {
