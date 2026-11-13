@@ -5,8 +5,10 @@
 
 /* vs-kot: the Tab Completion view and the colour of its icon in the activity bar */
 
-/* --- activity bar icon: green while suggestions work, red while they are switched on but cannot come.
-   The bar sets the icon colour inline and with !important for the active item, so this has to outrank both. */
+/*
+ * --- activity bar icon: green while suggestions work, red while they are switched on but cannot come.
+ * The bar sets the icon colour inline and with !important for the active item, so this has to outrank both.
+ */
 
 .monaco-workbench.tab-completion-good .composite-bar .action-item .action-label.codicon.codicon-tab-completion-view-icon,
 .monaco-workbench.tab-completion-good .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item .action-label.codicon.codicon-tab-completion-view-icon {
@@ -122,4 +124,38 @@
 	flex: 1;
 	min-width: 0;
 	overflow-wrap: anywhere;
+}
+
+/* --- statistics: what is counted down the side, the spans of time across */
+
+.tab-completion-view .tab-completion-usage {
+	width: 100%;
+	max-width: 300px;
+	border-collapse: collapse;
+	table-layout: fixed;
+	line-height: 22px;
+}
+
+.tab-completion-view .tab-completion-usage th,
+.tab-completion-view .tab-completion-usage td {
+	padding: 0;
+	font-weight: normal;
+	white-space: nowrap;
+}
+
+.tab-completion-view .tab-completion-usage-name {
+	overflow: hidden;
+	text-align: left;
+	text-overflow: ellipsis;
+	color: var(--vscode-descriptionForeground);
+}
+
+.tab-completion-view .tab-completion-usage-number {
+	width: 56px;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.tab-completion-view .tab-completion-usage thead .tab-completion-usage-number {
+	color: var(--vscode-descriptionForeground);
 }

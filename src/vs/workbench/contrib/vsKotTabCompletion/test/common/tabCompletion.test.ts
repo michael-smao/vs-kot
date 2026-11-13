@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { describeTabCompletionStatus, ITabCompletionStatus, parseTabCompletionStatus, TabCompletionAction, TabCompletionHealth, TabCompletionState } from '../../common/tabCompletion.js';
+import { formatTabCompletionAcceptRate, ITabCompletionUsage, parseTabCompletionUsage } from '../../common/tabCompletionUsage.js';
 
 suite('vs-kot tab completion status', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -49,5 +50,36 @@ suite('vs-kot tab completion status', () => {
 			noModel: undefined,
 			notAnObject: undefined,
 		});
+	});
+});
+
+suite('vs-kot tab completion usage', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const counts = { shown: 40, accepted: 10, lines: 12, characters: 300 };
+	const usage: ITabCompletionUsage = { since: '2026-11-13', today: counts, week: counts, total: counts };
+
+	test('counts are taken over whole, and anything incomplete is dropped', () => {
+		assert.deepStrictEqual({
+			complete: parseTabCompletionUsage({ ...usage, today: { ...counts, lines: 12.7, somethingElse: 1 }, somethingElse: true }),
+			noDay: parseTabCompletionUsage({ ...usage, since: 'yesterday' }),
+			countMissing: parseTabCompletionUsage({ ...usage, week: { shown: 1, accepted: 1, lines: 1 } }),
+			negativeCount: parseTabCompletionUsage({ ...usage, total: { ...counts, shown: -1 } }),
+			notAnObject: parseTabCompletionUsage(12),
+		}, {
+			complete: usage,
+			noDay: undefined,
+			countMissing: undefined,
+			negativeCount: undefined,
+			notAnObject: undefined,
+		});
+	});
+
+	test('the accept rate is a share of what was shown', () => {
+		assert.deepStrictEqual([
+			formatTabCompletionAcceptRate(counts),
+			formatTabCompletionAcceptRate({ ...counts, shown: 0, accepted: 0 }),
+			formatTabCompletionAcceptRate({ ...counts, shown: 3, accepted: 5 }),
+		], ['25%', '\u2013', '100%']);
 	});
 });

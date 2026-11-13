@@ -11,8 +11,9 @@
 import * as vscode from 'vscode';
 import { ContextCollector } from './context';
 import { ManagedModelServer, toGigabytes } from './modelServer';
-import { ICompletionTarget, TabCompletionProvider } from './provider';
+import { ICompletionTarget } from './provider';
 import { StatusReporter } from './statusReport';
+import { CountedTabCompletionProvider, UsageStatistics } from './usage';
 
 const SETUP_OFFERED_KEY = 'tabCompletion.setUpOffered';
 /** How long after a failed start of the model server the next keystroke may try again. */
@@ -41,7 +42,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	};
 
 	const contextCollector = new ContextCollector(log);
-	const provider = new TabCompletionProvider(log, getTarget, contextCollector);
+	// How often suggestions appear and are taken is counted, on this computer only, for the Tab Completion view
+	const usage = new UsageStatistics(context.globalState);
+	const provider = new CountedTabCompletionProvider(usage, log, getTarget, contextCollector);
 
 	// --- status bar
 
@@ -166,6 +169,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		server,
 		contextCollector,
 		provider,
+		usage,
 		statusItem,
 		// Feeds the Tab Completion view in the side bar and the colour of its icon
 		new StatusReporter(server, provider, getExternalEndpoint),

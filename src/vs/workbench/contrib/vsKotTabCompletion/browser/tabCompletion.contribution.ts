@@ -11,6 +11,7 @@ import { localize, localize2 } from '../../../../nls.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
@@ -22,6 +23,7 @@ import { Extensions as ViewContainerExtensions, IViewContainersRegistry, IViewsR
 import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
 import { getTabCompletionHealth, ITabCompletionStatusService, parseTabCompletionStatus, ReportTabCompletionStatusCommandId, TAB_COMPLETION_VIEW_CONTAINER_ID, TAB_COMPLETION_VIEW_ID, TabCompletionExtensionCommandId, TabCompletionHealth, TabCompletionStatusService } from '../common/tabCompletion.js';
+import { parseTabCompletionUsage, ReportTabCompletionUsageCommandId } from '../common/tabCompletionUsage.js';
 import { TabCompletionView } from './tabCompletionView.js';
 
 registerSingleton(ITabCompletionStatusService, TabCompletionStatusService, InstantiationType.Delayed);
@@ -32,6 +34,13 @@ CommandsRegistry.registerCommand(ReportTabCompletionStatusCommandId, (accessor, 
 	const status = parseTabCompletionStatus(value);
 	if (status) {
 		accessor.get(ITabCompletionStatusService).report(status);
+	}
+});
+
+CommandsRegistry.registerCommand(ReportTabCompletionUsageCommandId, (accessor, value: unknown) => {
+	const usage = parseTabCompletionUsage(value);
+	if (usage) {
+		accessor.get(ITabCompletionStatusService).reportUsage(usage);
 	}
 });
 
@@ -73,7 +82,11 @@ registerAction2(class extends Action2 {
 		});
 	}
 	async run(accessor: ServicesAccessor): Promise<void> {
-		await accessor.get(ICommandService).executeCommand(TabCompletionExtensionCommandId.RequestStatus);
+		const commandService = accessor.get(ICommandService);
+		await Promise.all([
+			commandService.executeCommand(TabCompletionExtensionCommandId.RequestStatus),
+			commandService.executeCommand(TabCompletionExtensionCommandId.RequestUsage)
+		]);
 	}
 });
 
@@ -102,6 +115,30 @@ registerAction2(class extends Action2 {
 	}
 	async run(accessor: ServicesAccessor): Promise<void> {
 		await accessor.get(IPreferencesService).openSettings({ query: 'tabCompletion' });
+	}
+});
+
+// In the "..." menu of the view, and in the command palette
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'tabCompletion.resetStatistics',
+			title: localize2('resetStatistics', "Reset Statistics"),
+			category: localize2('tabCompletion', "Tab Completion"),
+			f1: true,
+			menu: { id: MenuId.ViewTitle, when: whenInView, group: '1_statistics' }
+		});
+	}
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const commandService = accessor.get(ICommandService);
+		const { confirmed } = await accessor.get(IDialogService).confirm({
+			message: localize('resetStatistics.confirm', "Reset the statistics of Tab Completion?"),
+			detail: localize('resetStatistics.detail', "The counts of shown and accepted suggestions start again at zero."),
+			primaryButton: localize({ key: 'resetStatistics.button', comment: ['&& denotes a mnemonic'] }, "&&Reset")
+		});
+		if (confirmed) {
+			await commandService.executeCommand(TabCompletionExtensionCommandId.ResetUsage);
+		}
 	}
 });
 

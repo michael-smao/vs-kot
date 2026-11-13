@@ -8,6 +8,9 @@
 	"engines": {
 		"vscode": "*"
 	},
+	"enabledApiProposals": [
+		"inlineCompletionsAdditions"
+	],
 	"categories": [
 		"Other"
 	],

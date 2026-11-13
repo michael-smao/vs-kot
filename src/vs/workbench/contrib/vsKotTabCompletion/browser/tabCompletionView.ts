@@ -8,6 +8,7 @@
 import './media/tabCompletion.css';
 import { $, append, clearNode } from '../../../../base/browser/dom.js';
 import { Button } from '../../../../base/browser/ui/button/button.js';
+import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { ProgressBar } from '../../../../base/browser/ui/progressbar/progressbar.js';
 import { ISelectOptionItem, SelectBox } from '../../../../base/browser/ui/selectBox/selectBox.js';
 import { Codicon } from '../../../../base/common/codicons.js';
@@ -31,12 +32,23 @@ import { IViewletViewOptions } from '../../../browser/parts/views/viewsViewlet.j
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
 import { describeTabCompletionStatus, ITabCompletionDescription, ITabCompletionStatus, ITabCompletionStatusService, TAB_COMPLETION_VIEW_ID, TabCompletionAction, TabCompletionExtensionCommandId, TabCompletionHealth, TabCompletionSetting } from '../common/tabCompletion.js';
+import { formatTabCompletionAcceptRate, formatTabCompletionCount, formatTabCompletionDay, ITabCompletionUsage, ITabCompletionUsageCounts } from '../common/tabCompletionUsage.js';
 
 interface IButtonDescription {
 	readonly label: string;
 	readonly primary: boolean;
 	readonly run: () => void;
 }
+
+/** One line of the statistics: what is counted, and how a count of it reads. */
+interface IUsageRow {
+	readonly name: string;
+	readonly description: string;
+	readonly format: (counts: ITabCompletionUsageCounts) => string;
+}
+
+/** The spans of time the statistics are shown for, one column each. */
+const usageSpans: readonly (keyof Omit<ITabCompletionUsage, 'since'>)[] = ['today', 'week', 'total'];
 
 /** One entry of the model list. `undefined` as value stands for "ask for a name". */
 interface IModelOption {
@@ -60,6 +72,10 @@ export class TabCompletionView extends ViewPane {
 	private serverSection!: HTMLElement;
 	private serverRows!: HTMLElement;
 	private serverButtons!: HTMLElement;
+	private usageSection!: HTMLElement;
+	/** The cells of the statistics that hold numbers, line by line. */
+	private usageCells: { readonly row: IUsageRow; readonly cells: readonly HTMLElement[] }[] = [];
+	private usageHint!: HTMLElement;
 
 	// Buttons and the model list are only built anew when what they show changes. While a download reports
 	// its progress several times a second, they stay as they are and can be used.
@@ -114,7 +130,13 @@ export class TabCompletionView extends ViewPane {
 		this.serverRows = append(this.serverSection, $('.tab-completion-rows'));
 		this.serverButtons = append(this.serverSection, $('.tab-completion-buttons'));
 
+		this.usageSection = append(body, $('.tab-completion-section'));
+		append(this.usageSection, $('h3.tab-completion-heading')).textContent = localize('statistics', "Statistics");
+		this.renderUsageTable(append(this.usageSection, $('table.tab-completion-usage')));
+		this.usageHint = append(this.usageSection, $('.tab-completion-hint'));
+
 		this._register(this.statusService.onDidChangeStatus(() => this.update()));
+		this._register(this.statusService.onDidChangeUsage(() => this.updateUsage()));
 		this._register(this.onDidChangeBodyVisibility(visible => {
 			if (visible) {
 				this.requestStatus();
@@ -122,6 +144,7 @@ export class TabCompletionView extends ViewPane {
 		}));
 
 		this.update();
+		this.updateUsage();
 		this.requestStatus();
 	}
 
@@ -132,9 +155,13 @@ export class TabCompletionView extends ViewPane {
 		}
 	}
 
-	/** Asks the extension to look at its model server again. Not an error if the extension is not there yet. */
+	/**
+	 * Asks the extension to look at its model server again, and for how much it was used: other windows count too.
+	 * Not an error if the extension is not there yet.
+	 */
 	private requestStatus(): void {
 		this.commandService.executeCommand(TabCompletionExtensionCommandId.RequestStatus).then(undefined, () => undefined);
+		this.commandService.executeCommand(TabCompletionExtensionCommandId.RequestUsage).then(undefined, () => undefined);
 	}
 
 	private runExtensionCommand(id: TabCompletionExtensionCommandId): void {
@@ -307,6 +334,52 @@ export class TabCompletionView extends ViewPane {
 			primary: false,
 			run: () => this.runExtensionCommand(TabCompletionExtensionCommandId.StopServer)
 		}] : [], 'serverButtonsKey');
+	}
+
+	// --- statistics
+
+	/** The table is built once. What changes later is only the numbers in it. */
+	private renderUsageTable(table: HTMLElement): void {
+		const rows: IUsageRow[] = [
+			{ name: localize('usage.shown', "Suggestions"), description: localize('usage.shown.description', "Suggestions that appeared in the editor."), format: counts => formatTabCompletionCount(counts.shown) },
+			{ name: localize('usage.accepted', "Accepted"), description: localize('usage.accepted.description', "Suggestions that Tab accepted, in whole or word by word."), format: counts => formatTabCompletionCount(counts.accepted) },
+			{ name: localize('usage.rate', "Accept Rate"), description: localize('usage.rate.description', "The share of the suggestions that were accepted."), format: formatTabCompletionAcceptRate },
+			{ name: localize('usage.lines', "Lines Written"), description: localize('usage.lines.description', "Lines of code that accepted suggestions wrote. A line that a suggestion only finished counts as one."), format: counts => formatTabCompletionCount(counts.lines) },
+			{ name: localize('usage.characters', "Characters"), description: localize('usage.characters.description', "Characters that accepted suggestions wrote."), format: counts => formatTabCompletionCount(counts.characters) }
+		];
+		const spanNames: Record<typeof usageSpans[number], string> = {
+			today: localize('usage.today', "Today"),
+			week: localize('usage.week', "7 Days"),
+			total: localize('usage.total', "All Time")
+		};
+
+		const head = append(append(table, $('thead')), $('tr'));
+		append(head, $('td'));
+		for (const span of usageSpans) {
+			append(head, $('th.tab-completion-usage-number', { scope: 'col' })).textContent = spanNames[span];
+		}
+
+		const body = append(table, $('tbody'));
+		for (const row of rows) {
+			const line = append(body, $('tr'));
+			const name = append(line, $('th.tab-completion-usage-name', { scope: 'row' }));
+			name.textContent = row.name;
+			this._register(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), name, row.description));
+			this.usageCells.push({ row, cells: usageSpans.map(() => append(line, $('td.tab-completion-usage-number'))) });
+		}
+	}
+
+	private updateUsage(): void {
+		const usage = this.statusService.usage;
+		this.usageSection.classList.toggle('hidden', !usage);
+		if (!usage) {
+			return;
+		}
+
+		for (const { row, cells } of this.usageCells) {
+			usageSpans.forEach((span, index) => cells[index].textContent = row.format(usage[span]));
+		}
+		this.usageHint.textContent = localize('usage.hint', "Counted since {0}. The numbers stay on this computer.", formatTabCompletionDay(usage.since));
 	}
 }
 

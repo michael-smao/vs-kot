@@ -93,4 +93,64 @@ const secret = ['/p/.env', '/p/.env.local', '/p/.env-production', '/p/prod.env',
 const fine = ['/p/src/environment.ts', '/p/src/env.ts', '/p/src/keyboard.ts', '/p/src/secretary.ts', '/p/README.md', '/p/src/credentialsForm.tsx', '/p/src/keys/index.ts'];
 check('files that usually hold secrets are recognised', secret.every(f => context.NEVER_SHARE.test(f)), 'not recognised: ' + (secret.filter(f => !context.NEVER_SHARE.test(f)).join(', ') || 'none'));
 check('ordinary source files are not taken for secrets', fine.every(f => !context.NEVER_SHARE.test(f)), 'wrongly held back: ' + (fine.filter(f => context.NEVER_SHARE.test(f)).join(', ') || 'none'));
+
+// --- statistics: which of the items the editor is handed is a new suggestion, and what an accepted one wrote
+const usage = load('usage.js', ['readRecord', 'addToRecord', 'summarize', 'toDay']);
+const counted = () => { const sum = { shown: 0, accepted: 0, lines: 0, characters: 0 }; return { sum, counter: new usage.SuggestionCounter(counts => { for (const name of Object.keys(counts)) { sum[name] += counts[name]; } }) }; };
+const sameCounts = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+{
+	// "foo(bar);" is suggested at offset 10, two characters of it are typed, then Tab takes the rest
+	const file = { text: 'const x = ' }; const read = (from, to) => file.text.slice(from, to);
+	const { sum, counter } = counted(); const [first, typedAlong, elsewhere] = [{}, {}, {}];
+	counter.offer(first, { uri: 'a', start: 10, cursor: 10, end: 10, text: 'foo(bar);' }, read); counter.show(first);
+	file.text += 'fo';
+	counter.offer(typedAlong, { uri: 'a', start: 12, cursor: 12, end: 12, text: 'o(bar);' }, read); counter.show(typedAlong);
+	const whileTyping = { ...sum };
+	counter.accept(typedAlong);
+	const afterTab = { ...sum };
+	// the same text at the same place of another file is another suggestion
+	counter.offer(elsewhere, { uri: 'b', start: 12, cursor: 12, end: 12, text: 'o(bar);' }, read); counter.show(elsewhere);
+	check('a suggestion that is typed along with is counted once, and Tab counts what it wrote', sameCounts(whileTyping, { shown: 1, accepted: 0, lines: 0, characters: 0 }) && sameCounts(afterTab, { shown: 1, accepted: 1, lines: 1, characters: 7 }) && sum.shown === 2, `while typing ${JSON.stringify(whileTyping)}, after Tab ${JSON.stringify(afterTab)}, with the other file ${JSON.stringify(sum)}`);
+}
+{
+	// typed is "na", the entry "name" of the suggestion list is selected, and the bracket right of the cursor is replaced
+	const { sum, counter } = counted(); const item = {};
+	counter.offer(item, { uri: 'a', start: 4, cursor: 6, end: 7, text: 'name, b)' }, () => '');
+	counter.accept(item);
+	check('what was typed already and what is replaced are not counted as written', sameCounts(sum, { shown: 1, accepted: 1, lines: 1, characters: 5 }), JSON.stringify(sum));
+}
+{
+	// three lines, taken in two steps: first a word, then the rest
+	const { sum, counter } = counted(); const item = {};
+	counter.offer(item, { uri: 'a', start: 0, cursor: 0, end: 0, text: 'if (a) {\n    b();\n}' }, () => ''); counter.show(item);
+	counter.accept(item, 2);
+	const afterWord = { ...sum };
+	counter.accept(item);
+	check('a suggestion taken in parts is one accepted suggestion with all its lines', sameCounts(afterWord, { shown: 1, accepted: 1, lines: 1, characters: 2 }) && sameCounts(sum, { shown: 1, accepted: 1, lines: 3, characters: 19 }), `after the word ${JSON.stringify(afterWord)}, after the rest ${JSON.stringify(sum)}`);
+}
+{
+	// an entry of the suggestion list is accepted with Enter: that part is not the suggestion's
+	const { sum, counter } = counted(); const item = {};
+	counter.offer(item, { uri: 'a', start: 0, cursor: 2, end: 2, text: 'name.trim()' }, () => ''); counter.show(item);
+	counter.skip(item, 4);
+	counter.accept(item);
+	check('what an entry of the suggestion list wrote is not counted', sameCounts(sum, { shown: 1, accepted: 1, lines: 1, characters: 7 }), JSON.stringify(sum));
+}
+
+// --- statistics: the days
+{
+	const { readRecord, addToRecord, summarize, toDay } = usage.__test;
+	const one = { shown: 4, accepted: 1, lines: 2, characters: 30 };
+	const now = new Date(2026, 2, 3, 12); // 3 March, so that the week reaches back into February
+	const record = readRecord({ since: '2026-01-01', total: { shown: 'many', accepted: -3 }, days: { 'not a day': one, '2026-02-25': { shown: 1.9 } } }, toDay(now));
+	const read = JSON.stringify(record);
+	for (const [year, month, day] of [[2026, 2, 3], [2026, 2, 3], [2026, 1, 25], [2026, 1, 24], [2025, 11, 31]]) { addToRecord(record, toDay(new Date(year, month, day)), one); }
+	const summary = summarize(record, now);
+	check('what was stored is read with care: only days, only counts', read === JSON.stringify({ since: '2026-01-01', total: { shown: 0, accepted: 0, lines: 0, characters: 0 }, days: { '2026-02-25': { shown: 1, accepted: 0, lines: 0, characters: 0 } } }), read);
+	check('today, the last seven days and all time are summed from the days', summary.since === '2026-01-01' && summary.today.shown === 8 && summary.week.shown === 13 && summary.week.characters === 90 && summary.total.shown === 20 && summary.total.accepted === 5, JSON.stringify(summary));
+	const long = readRecord(undefined, '2026-01-01');
+	for (let day = 1; day <= 120; day++) { addToRecord(long, toDay(new Date(2026, 0, day)), one); }
+	const days = Object.keys(long.days).sort();
+	check('old days are only kept in the total', days.length === 92 && days.at(-1) === toDay(new Date(2026, 0, 120)) && long.total.shown === 480 && long.since === '2026-01-01', `${days.length} days from ${days[0]} to ${days.at(-1)}, ${long.total.shown} shown in total`);
+}
 console.log(failed === 0 ? 'all passed' : `${failed} failed`); process.exit(failed === 0 ? 0 : 1);

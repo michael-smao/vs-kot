@@ -49,6 +49,7 @@ While you type, the editor suggests the rest of the line or a small block, and `
 - Suggestions use the real names from your project: the model also sees the definitions the current file imports and similar code from other open files.
 - Files that usually hold secrets, such as `.env` files and keys, are never shown to a model.
 - The Tab Completion view in the activity bar shows the state of the model server and lets you pick the model. Its icon is green when everything works and red when something needs attention.
+- The same view has statistics: how many suggestions appeared, how many you accepted, and how many lines and characters that wrote, for today, the last seven days and all time. They are numbers only, kept on your Mac; Reset Statistics in the view's menu starts them at zero.
 - To use a model server of your own, set `tabCompletion.endpoint`. Ollama and OpenAI-style completion servers are supported.
 
 ### Team defaults

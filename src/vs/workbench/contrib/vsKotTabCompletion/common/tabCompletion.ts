@@ -8,13 +8,15 @@
 // Tab completion itself is the built-in extension `extensions/vs-kot-tab-completion`: it runs the model server
 // and makes the suggestions. The workbench only shows how it is doing, as a view in the side bar and as the colour
 // of that view's icon in the activity bar. The extension tells the workbench by running the command
-// `ReportTabCompletionStatusCommandId` with an `ITabCompletionStatus` whenever something changes.
+// `ReportTabCompletionStatusCommandId` with an `ITabCompletionStatus` whenever something changes. How much it was
+// used comes the same way, see ./tabCompletionUsage.ts.
 
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { isObject, isString } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { ITabCompletionUsage } from './tabCompletionUsage.js';
 
 export const TAB_COMPLETION_VIEW_CONTAINER_ID = 'workbench.view.tabCompletion';
 export const TAB_COMPLETION_VIEW_ID = 'workbench.view.tabCompletion.status';
@@ -29,7 +31,11 @@ export const enum TabCompletionExtensionCommandId {
 	StopServer = 'tabCompletion.stopServer',
 	ShowLog = 'tabCompletion.showLog',
 	/** Makes the extension look at its model server again and report. */
-	RequestStatus = '_tabCompletion.requestStatus'
+	RequestStatus = '_tabCompletion.requestStatus',
+	/** Makes the extension report how much it was used. */
+	RequestUsage = '_tabCompletion.requestUsage',
+	/** Makes the extension forget how much it was used and count anew. */
+	ResetUsage = '_tabCompletion.resetUsage'
 }
 
 /** The settings of the extension that the view reads or changes. */
@@ -269,6 +275,12 @@ export interface ITabCompletionStatusService {
 	readonly onDidChangeStatus: Event<void>;
 
 	report(status: ITabCompletionStatus): void;
+
+	/** How much tab completion was used, as the extension reported last. `undefined` until it reported for the first time. */
+	readonly usage: ITabCompletionUsage | undefined;
+	readonly onDidChangeUsage: Event<void>;
+
+	reportUsage(usage: ITabCompletionUsage): void;
 }
 
 export class TabCompletionStatusService extends Disposable implements ITabCompletionStatusService {
@@ -287,5 +299,19 @@ export class TabCompletionStatusService extends Disposable implements ITabComple
 	report(status: ITabCompletionStatus): void {
 		this._status = status;
 		this._onDidChangeStatus.fire();
+	}
+
+	private readonly _onDidChangeUsage = this._register(new Emitter<void>());
+	readonly onDidChangeUsage = this._onDidChangeUsage.event;
+
+	private _usage: ITabCompletionUsage | undefined;
+
+	get usage(): ITabCompletionUsage | undefined {
+		return this._usage;
+	}
+
+	reportUsage(usage: ITabCompletionUsage): void {
+		this._usage = usage;
+		this._onDidChangeUsage.fire();
 	}
 }
