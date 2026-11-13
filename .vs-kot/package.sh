@@ -24,15 +24,19 @@ pnpm run gulp vscode-darwin-arm64-min
 # 2. Source maps only help when debugging the editor itself and are a third of the app's size.
 find "$APP/Contents/Resources/app" -name '*.map' -type f -delete
 
-# 3. The app has no Apple developer signature. Give it an ad-hoc one so the bundle is at least consistent:
+# 3. Native modules compiled on this Mac name the folders they were built in. Take those paths out, and stop if any
+#    file of the app still names the home folder. Before signing, because it changes files of the app.
+"$ROOT/.vs-kot/strip-build-paths.sh" "$APP"
+
+# 4. The app has no Apple developer signature. Give it an ad-hoc one so the bundle is at least consistent:
 #    without it macOS calls a downloaded copy "damaged" instead of offering "Open Anyway".
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
-# 4. ditto keeps symlinks and permissions intact, which Finder's "Compress" and plain zip do not guarantee.
+# 5. ditto keeps symlinks and permissions intact, which Finder's "Compress" and plain zip do not guarantee.
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
-# 5. latest.json, the small file every release carries next to the zip. An installed vs-kot reads it to learn whether
+# 6. latest.json, the small file every release carries next to the zip. An installed vs-kot reads it to learn whether
 #    the release is newer than itself, where the zip is and which SHA-256 it must have. Release number and commit are
 #    taken from the app that was just built, so the file cannot describe anything else.
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
@@ -55,7 +59,7 @@ fs.writeFileSync(out, JSON.stringify(manifest, null, "\t") + "\n");
 console.log(`latest.json describes vs-kot ${manifest.version}`);
 ' "$APP/Contents/Resources/app/product.json" "$SHA" "$OUT/latest.json"
 
-# 6. Sign the release where the release key is. Installed apps take no release without a signature, and
+# 7. Sign the release where the release key is. Installed apps take no release without a signature, and
 #    .vs-kot/release.sh publishes none.
 if [ -f "${VS_KOT_SIGNING_KEY:-$HOME/.vs-kot-release/signing-key.pem}" ]; then
 	"$ROOT/.vs-kot/sign-release.sh"
