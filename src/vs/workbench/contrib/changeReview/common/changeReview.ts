@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// vs-claude: change review. Unstaged changes are shown inline in the editor and reviewed one by one.
+// vs-kot: change review. Unstaged changes are shown inline in the editor and reviewed one by one.
 // Approving a change stages it in git, so "unstaged" always means "not reviewed yet".
 
 import { Event } from '../../../../base/common/event.js';

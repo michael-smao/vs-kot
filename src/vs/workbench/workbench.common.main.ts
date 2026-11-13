@@ -288,14 +288,14 @@ import './contrib/scm/browser/scm.contribution.js';
 import './contrib/scm/browser/quickDiff.contribution.js';
 import './contrib/scm/browser/scm.service.contribution.js';
 
-// vs-claude: Change Review
+// vs-kot: Change Review
 import './contrib/changeReview/browser/changeReview.contribution.js';
 
-// vs-claude: Team Settings
-import './contrib/vsClaudeTeam/common/teamSettings.contribution.js';
+// vs-kot: Team Settings
+import './contrib/vsKotTeam/common/teamSettings.contribution.js';
 
-// vs-claude: Tab Completion view
-import './contrib/vsClaudeTabCompletion/browser/tabCompletion.contribution.js';
+// vs-kot: Tab Completion view
+import './contrib/vsKotTabCompletion/browser/tabCompletion.contribution.js';
 
 // Debug
 import './contrib/debug/browser/debug.contribution.js';

@@ -581,7 +581,7 @@ function generateNodeCompileCacheTask(platform: string, destinationFolderName: s
 
 const buildRoot = path.dirname(root);
 
-// vs-claude: the built-in Copilot extension is not built into the app, because AI is off in this fork and nothing
+// vs-kot: the built-in Copilot extension is not built into the app, because AI is off in this fork and nothing
 // at runtime needs the extension. To ship it again, set this to true; a local (non-CI) build then also needs a fix,
 // because it packages the extension without `@github/copilot/sdk` (build/.moduleignore strips it) and the ripgrep
 // shim step fails on that.
@@ -610,7 +610,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 			compileNativeExtensionsBuildTask,
 			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts),
-			...(shipCopilotExtension ? [prepareCopilotRipgrepShimTask(platform, arch, destinationFolderName)] : []) // vs-claude: see shipCopilotExtension
+			...(shipCopilotExtension ? [prepareCopilotRipgrepShimTask(platform, arch, destinationFolderName)] : []) // vs-kot: see shipCopilotExtension
 		];
 
 		if (platform === 'win32') {
@@ -637,7 +637,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 			copyCodiconsTask,
 			cleanExtensionsBuildTask,
 			compileNonNativeExtensionsBuildTask,
-			...(shipCopilotExtension ? [compileCopilotExtensionBuildTask] : []), // vs-claude: see shipCopilotExtension
+			...(shipCopilotExtension ? [compileCopilotExtensionBuildTask] : []), // vs-kot: see shipCopilotExtension
 			compileExtensionMediaBuildTask,
 			writeISODate('out-build'),
 			esbuildBundleTask,

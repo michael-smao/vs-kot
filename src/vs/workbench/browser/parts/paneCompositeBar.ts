@@ -31,7 +31,7 @@ import { GestureEvent } from '../../../base/browser/touch.js';
 import { IPaneCompositePart } from './paneCompositePart.js';
 import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import { IViewsService } from '../../services/views/common/viewsService.js';
-import { applyVsClaudeActivityBarDefaults, vsClaudeActivityBarDefaultsVersion } from './vsClaudeActivityBar.js';
+import { applyVsKotActivityBarDefaults, vsKotActivityBarDefaultsVersion } from './vsKotActivityBar.js';
 
 interface IPlaceholderViewContainer {
 	readonly id: string;
@@ -113,9 +113,9 @@ export class PaneCompositeBar extends Disposable {
 	) {
 		super();
 
-		// vs-claude: bring the activity bar icons to the fork's defaults before they are read
+		// vs-kot: bring the activity bar icons to the fork's defaults before they are read
 		if (this.location === ViewContainerLocation.Sidebar) {
-			this.applyVsClaudeDefaults();
+			this.applyVsKotDefaults();
 		}
 
 		this.dndHandler = new CompositeDragAndDrop(this.viewDescriptorService, this.location, this.options.orientation,
@@ -676,17 +676,17 @@ export class PaneCompositeBar extends Disposable {
 	}
 
 	/**
-	 * vs-claude: applies the fork's default icons once per profile, and once more whenever those defaults
+	 * vs-kot: applies the fork's default icons once per profile, and once more whenever those defaults
 	 * get a new version. What the user pins or unpins afterwards is kept.
 	 */
-	private applyVsClaudeDefaults(): void {
-		const appliedVersionKey = `${this.options.pinnedViewContainersKey}.vsClaudeDefaults`;
-		if (this.storageService.getNumber(appliedVersionKey, StorageScope.PROFILE, 0) >= vsClaudeActivityBarDefaultsVersion) {
+	private applyVsKotDefaults(): void {
+		const appliedVersionKey = `${this.options.pinnedViewContainersKey}.vsKotDefaults`;
+		if (this.storageService.getNumber(appliedVersionKey, StorageScope.PROFILE, 0) >= vsKotActivityBarDefaultsVersion) {
 			return;
 		}
 
-		this.setPinnedViewContainers(applyVsClaudeActivityBarDefaults(this.getPinnedViewContainers()));
-		this.storageService.store(appliedVersionKey, vsClaudeActivityBarDefaultsVersion, StorageScope.PROFILE, StorageTarget.USER);
+		this.setPinnedViewContainers(applyVsKotActivityBarDefaults(this.getPinnedViewContainers()));
+		this.storageService.store(appliedVersionKey, vsKotActivityBarDefaultsVersion, StorageScope.PROFILE, StorageTarget.USER);
 	}
 
 	private getPinnedViewContainers(): IPinnedViewContainer[] {

@@ -76,7 +76,7 @@ const compilations = [
 	'extensions/tunnel-forwarding/tsconfig.json',
 	'extensions/typescript-language-features/web/tsconfig.json',
 	'extensions/typescript-language-features/tsconfig.json',
-	'extensions/vs-claude-tab-completion/tsconfig.json', // vs-claude: tab completion from a self-hosted model
+	'extensions/vs-kot-tab-completion/tsconfig.json', // vs-kot: tab completion from a self-hosted model
 	'extensions/vscode-api-tests/tsconfig.json',
 	'extensions/vscode-colorize-tests/tsconfig.json',
 	'extensions/vscode-colorize-perf-tests/tsconfig.json',

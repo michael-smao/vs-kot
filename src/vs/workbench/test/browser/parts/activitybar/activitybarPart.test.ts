@@ -675,7 +675,7 @@ suite('ActivitybarPart', () => {
 				modernCompactDensity: sizesFor(false, true, true),
 			},
 			{
-				// vs-claude: the bar has no Accounts and Manage icons, so no sizes are passed for them.
+				// vs-kot: the bar has no Accounts and Manage icons, so no sizes are passed for them.
 				// Items stack flush against each other, so the stride is just the action height.
 				classicDefault: { compositeSize: 48, overflowActionSize: 48, globalActivities: undefined },
 				classicCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: undefined },

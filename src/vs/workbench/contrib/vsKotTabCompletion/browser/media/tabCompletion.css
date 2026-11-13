@@ -1,0 +1,125 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* vs-kot: the Tab Completion view and the colour of its icon in the activity bar */
+
+/* --- activity bar icon: green while suggestions work, red while they are switched on but cannot come.
+   The bar sets the icon colour inline and with !important for the active item, so this has to outrank both. */
+
+.monaco-workbench.tab-completion-good .composite-bar .action-item .action-label.codicon.codicon-tab-completion-view-icon,
+.monaco-workbench.tab-completion-good .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item .action-label.codicon.codicon-tab-completion-view-icon {
+	color: var(--vscode-charts-green) !important;
+}
+
+.monaco-workbench.tab-completion-problem .composite-bar .action-item .action-label.codicon.codicon-tab-completion-view-icon,
+.monaco-workbench.tab-completion-problem .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item .action-label.codicon.codicon-tab-completion-view-icon {
+	color: var(--vscode-charts-red) !important;
+}
+
+/* --- view */
+
+.tab-completion-view .tab-completion-body {
+	box-sizing: border-box;
+	overflow-y: auto;
+	padding: 8px 20px 16px;
+}
+
+.tab-completion-view .hidden {
+	display: none !important;
+}
+
+.tab-completion-view .tab-completion-headline {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.tab-completion-view .tab-completion-headline-icon.good {
+	color: var(--vscode-charts-green);
+}
+
+.tab-completion-view .tab-completion-headline-icon.problem {
+	color: var(--vscode-charts-red);
+}
+
+.tab-completion-view .tab-completion-headline-icon.neutral {
+	color: var(--vscode-descriptionForeground);
+}
+
+.tab-completion-view .tab-completion-detail {
+	margin-top: 6px;
+	line-height: 1.4;
+	color: var(--vscode-descriptionForeground);
+	overflow-wrap: anywhere;
+}
+
+.tab-completion-view .tab-completion-progress {
+	position: relative;
+	height: 2px;
+	margin-top: 10px;
+}
+
+.tab-completion-view .tab-completion-buttons {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 12px;
+}
+
+.tab-completion-view .tab-completion-buttons .monaco-button {
+	max-width: 300px;
+}
+
+.tab-completion-view .tab-completion-section {
+	margin-top: 20px;
+	padding-top: 12px;
+	border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border, transparent));
+}
+
+.tab-completion-view .tab-completion-heading {
+	margin: 0 0 8px;
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+}
+
+.tab-completion-view .tab-completion-select {
+	max-width: 300px;
+}
+
+.tab-completion-view .tab-completion-select .monaco-select-box {
+	width: 100%;
+	padding: 2px 6px;
+}
+
+.tab-completion-view .tab-completion-hint {
+	margin-top: 6px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.tab-completion-view .tab-completion-hint:empty {
+	display: none;
+}
+
+.tab-completion-view .tab-completion-row {
+	display: flex;
+	gap: 8px;
+	line-height: 22px;
+}
+
+.tab-completion-view .tab-completion-row-name {
+	flex: 0 0 72px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.tab-completion-view .tab-completion-row-value {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}

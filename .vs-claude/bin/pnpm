@@ -1,4 +1,0 @@
-#!/bin/sh
-# vs-claude: run the pnpm version pinned in package.json without changing the global pnpm
-export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-exec corepack pnpm "$@"

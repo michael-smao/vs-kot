@@ -1514,7 +1514,7 @@ export class ChatEntitlementContext extends Disposable {
 	private _forceHidden = false;
 
 	private withConfiguration(state: IChatEntitlementContextState): IChatEntitlementContextState {
-		// vs-claude: AI features are always hidden in this fork, whatever the setting or policy state says
+		// vs-kot: AI features are always hidden in this fork, whatever the setting or policy state says
 		return {
 			...state,
 			hidden: true

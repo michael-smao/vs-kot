@@ -123,10 +123,10 @@ export interface IProductConfiguration {
 
 	readonly builtInExtensions?: IBuiltInExtension[];
 
-	/** vs-claude: settings the team has fixed. Nobody can change them, and the Settings editor shows them as managed. */
-	readonly vsClaudeManagedSettings?: IStringDictionary<unknown>;
-	/** vs-claude: the team's default values for settings. Unlike the managed ones they can be changed. */
-	readonly vsClaudeDefaultSettings?: IStringDictionary<unknown>;
+	/** vs-kot: settings the team has fixed. Nobody can change them, and the Settings editor shows them as managed. */
+	readonly vsKotManagedSettings?: IStringDictionary<unknown>;
+	/** vs-kot: the team's default values for settings. Unlike the managed ones they can be changed. */
+	readonly vsKotDefaultSettings?: IStringDictionary<unknown>;
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];
 

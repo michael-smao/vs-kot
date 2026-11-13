@@ -231,7 +231,7 @@
 			"project": "vscode-workbench"
 		},
 		{
-			"name": "vs/workbench/contrib/vsClaudeTabCompletion",
+			"name": "vs/workbench/contrib/vsKotTabCompletion",
 			"project": "vscode-workbench"
 		},
 		{

@@ -290,7 +290,7 @@ export class ActivitybarPart extends Part {
 				activeBackgroundColor: undefined, inactiveBackgroundColor: undefined, activeBorderBottomColor: undefined,
 			}),
 			overflowActionSize: compositeSize,
-		}, Parts.ACTIVITYBAR_PART, this.paneCompositePart, undefined /* vs-claude: no Accounts and Manage icons; upstream passes { actionHeight: this.actionHeight, actionGap: this.actionGap } */);
+		}, Parts.ACTIVITYBAR_PART, this.paneCompositePart, undefined /* vs-kot: no Accounts and Manage icons; upstream passes { actionHeight: this.actionHeight, actionGap: this.actionGap } */);
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {

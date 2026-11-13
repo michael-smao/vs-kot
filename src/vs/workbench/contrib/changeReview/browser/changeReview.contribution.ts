@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// vs-claude: change review. See ../common/changeReview.ts for what it does.
+// vs-kot: change review. See ../common/changeReview.ts for what it does.
 
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';

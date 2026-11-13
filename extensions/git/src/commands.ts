@@ -1953,7 +1953,7 @@ export class CommandCenter {
 			await repository.stage(resource, result, modifiedDocument.encoding));
 	}
 
-	// vs-claude: stages the given text as the content of a file. The change review of the workbench computes that
+	// vs-kot: stages the given text as the content of a file. The change review of the workbench computes that
 	// text itself, from the staged version it shows, so that it does not depend on how fresh the documents here are.
 	@command('git.stageContent')
 	async stageContent(uri: Uri, contents: string): Promise<void> {

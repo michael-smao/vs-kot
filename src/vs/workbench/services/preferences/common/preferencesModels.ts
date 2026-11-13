@@ -17,7 +17,7 @@ import { ITextEditorModel } from '../../../../editor/common/services/resolverSer
 import * as nls from '../../../../nls.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ConfigurationDefaultValueSource, ConfigurationScope, Extensions, IConfigurationNode, IConfigurationRegistry, IRegisteredConfigurationPropertySchema, OVERRIDE_PROPERTY_REGEX } from '../../../../platform/configuration/common/configurationRegistry.js';
-import { isAISettingKey } from '../../../../platform/chat/common/vsClaudeAIOff.js';
+import { isAISettingKey } from '../../../../platform/chat/common/vsKotAIOff.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { EditorModel } from '../../../common/editor/editorModel.js';
@@ -659,7 +659,7 @@ export class DefaultSettings extends Disposable {
 		}
 
 		if (isAISettingKey(key)) {
-			return undefined; // vs-claude: the settings of the switched-off AI features are not listed
+			return undefined; // vs-kot: the settings of the switched-off AI features are not listed
 		}
 
 		const value = prop.default;
