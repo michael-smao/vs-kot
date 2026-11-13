@@ -20,6 +20,13 @@ const MAX_PREFIX_CHARS = 4800;
 const MAX_SUFFIX_CHARS = 800;
 /** The start of the code that is sent moves in steps of this size, see `getPrefixStart`. */
 const PREFIX_STEP_CHARS = 1200;
+/** The least code before the cursor that is sent, however little of it fits. */
+const MIN_PREFIX_CHARS = 600;
+/**
+ * What is left free in the context besides the room for the answer. The sizes above are in characters, the
+ * context is in tokens, and how many tokens a text makes is only known for sure once the model server has read it.
+ */
+const PROMPT_MARGIN_TOKENS = 256;
 /**
  * How long an answer may take. Reading a long prompt for the first time takes the 7B model several seconds on a fast
  * Mac and more on a slower one; the model server keeps what it has read, so the next request is quick.
@@ -37,6 +44,10 @@ export interface ICompletionTarget {
 	readonly url: string;
 	readonly api: 'ollama' | 'openai';
 	readonly model: string;
+	/** Makes sure the model is in memory. Loading it is not something a request may be cancelled in the middle of. */
+	prepare?(): Promise<void>;
+	/** Told after every answer. */
+	noteUse?(): void;
 }
 
 /** What the model answered. */
@@ -44,6 +55,8 @@ interface IAnswer {
 	readonly text: string;
 	/** Whether the answer ran into the length limit instead of ending by itself. */
 	readonly isCutOff: boolean;
+	/** How many tokens the model server made of the prompt, when it says so. */
+	readonly promptTokens: number | undefined;
 }
 
 /** The last suggestion and where it was made, to recognise typing along with it. */
@@ -62,6 +75,11 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	readonly onDidChangeReachable = this._onDidChangeReachable.event;
 
 	private _last: ILastSuggestion | undefined;
+	/**
+	 * Per file, how many tokens its prompts really made compared to what was estimated. Text that is unlike code,
+	 * such as tables of numbers or another script, is then cut to what fits, and no shorter.
+	 */
+	private readonly _tokensPerEstimate = new Map<string, number>();
 	private _backoffUntil = 0;
 	private _isReachable = true;
 
@@ -149,11 +167,23 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			return undefined;
 		}
 
+		// After a long pause the model has to be loaded first. Typing on must not interrupt that.
+		await target.prepare?.();
+		if (token.isCancellationRequested) {
+			return undefined;
+		}
+
+		// The prompt has to fit into the context of the model together with the answer. What does not fit is left
+		// out here, the least important first: the model server would cut the prompt at its start instead.
+		const key = document.uri.toString();
+		const maxTokens = Math.round(configuration.get('maxTokens', 128));
+		const fitted = fitToContext(snippets, prefix, suffix, CONTEXT_TOKENS - maxTokens - PROMPT_MARGIN_TOKENS, this._tokensPerEstimate.get(key) ?? 1);
+
 		const singleLine = restOfLine.trim().length > 0;
 		const started = Date.now();
 		let answer: IAnswer | undefined;
 		try {
-			answer = await this._request(configuration, target, snippets, document.uri, prefix, suffix, singleLine, token);
+			answer = await this._request(configuration, target, fitted.snippets, document.uri, fitted.prefix, fitted.suffix, singleLine, maxTokens, token);
 		} catch (error) {
 			if (token.isCancellationRequested) {
 				this._log.trace(`superseded after ${Date.now() - started} ms, while the model was answering`);
@@ -169,6 +199,8 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			return undefined;
 		}
 		this._setReachable(true);
+		target.noteUse?.();
+		this._learnTokens(key, fitted.estimate, answer.promptTokens);
 
 		const completion = cleanUp(answer, suffix, singleLine);
 		this._log.debug(`${Date.now() - started} ms, ${completion.length} characters, ${snippets.length} other files${selected ? `, continuing the selected entry "${lead}"` : ''}`);
@@ -184,6 +216,19 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 
 		this._last = { uri: document.uri.toString(), offset: document.offsetAt(position), before: prefix.slice(-CONTEXT_CHECK_CHARS), after: suffix.slice(0, CONTEXT_CHECK_CHARS), completion };
 		return [toItem(document, position, position, completion, restOfLine)];
+	}
+
+	/** Compares what a prompt was estimated at with what the model server made of it. */
+	private _learnTokens(key: string, estimate: number, actual: number | undefined): void {
+		if (actual === undefined || estimate <= 0) {
+			return;
+		}
+		// Far fewer tokens than estimated means that the model server cut the prompt: the estimate was too low, not too high
+		const ratio = actual < estimate * 0.2 ? 1.5 : actual / estimate;
+		this._tokensPerEstimate.set(key, Math.max(0.3, Math.min(2, ratio)));
+		if (this._tokensPerEstimate.size > 200) {
+			this._tokensPerEstimate.delete(this._tokensPerEstimate.keys().next().value!);
+		}
 	}
 
 	/**
@@ -218,7 +263,7 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	 * Asks the model the way Qwen describes for its Coder models (README of Qwen2.5-Coder and its technical report):
 	 * the fill-in prompt, for code from several files the repository layout in front of it, and greedy decoding.
 	 */
-	private async _request(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, snippets: IContextSnippet[], uri: vscode.Uri, prefix: string, suffix: string, singleLine: boolean, token: vscode.CancellationToken): Promise<IAnswer | undefined> {
+	private async _request(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, snippets: IContextSnippet[], uri: vscode.Uri, prefix: string, suffix: string, singleLine: boolean, maxTokens: number, token: vscode.CancellationToken): Promise<IAnswer | undefined> {
 		const template = configuration.get('promptTemplate', '<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>');
 		// The layout the models were trained on for code that spans several files:
 		//   <|repo_name|>name \n <|file_sep|>path \n code \n ... <|file_sep|>path of this file \n fill-in prompt
@@ -227,15 +272,19 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 		const otherFiles = snippets.length > 0 && separator
 			? (repositoryMarker ? `${repositoryMarker}${getRepositoryName(uri)}\n` : '') + snippets.map(snippet => `${separator}${snippet.path}\n${snippet.text}\n`).join('') + `${separator}${getShownPath(uri)}\n`
 			: '';
-		const prompt = otherFiles + template.replace('{prefix}', () => prefix).replace('{suffix}', () => suffix);
+		// In one pass: the code itself may contain "{suffix}", and that is not a placeholder
+		const prompt = otherFiles + template.replace(/\{(?<part>prefix|suffix)\}/g, (_match, part) => part === 'prefix' ? prefix : suffix);
 		this._log.trace(`prompt of ${prompt.length} characters, starting ${JSON.stringify(prompt.slice(0, 90))}`);
 
 		// The model is trained to write what is missing and then to end. It does end by itself, but what it takes to
 		// be missing can be more than was asked for: having finished a function, the 7B model at times goes on with
 		// another one that nobody started. So a suggestion ends with its line when the line goes on behind the cursor,
 		// and otherwise with its block, at the first empty line.
-		const stop = [...configuration.get<string[]>('stop', []), singleLine ? '\n' : '\n\n'];
-		const maxTokens = configuration.get('maxTokens', 128);
+		// A file with Windows line endings has an empty line as "\r\n\r\n".
+		const ends = singleLine ? ['\n'] : ['\n\n', '\r\n\r\n'];
+		const markers = configuration.get<string[]>('stop', []);
+		// Servers with the OpenAI kind of interface often take four at most. The model ends by itself with the first marker anyway.
+		const stop = target.api === 'openai' ? [...ends, ...markers].slice(0, 4) : [...markers, ...ends];
 
 		// Greedy decoding, as in Qwen's examples: the same code gets the same suggestion every time. Ollama applies
 		// no penalty for repetition by itself; saying so keeps it that way on a server with other defaults.
@@ -256,10 +305,11 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			if (!response.ok) {
 				throw new Error(`${response.status} ${response.statusText}: ${(await response.text()).slice(0, 200)}`);
 			}
-			const result = await response.json() as { response?: string; done_reason?: string; choices?: { text?: string; finish_reason?: string }[] };
+			const result = await response.json() as { response?: string; done_reason?: string; prompt_eval_count?: number; choices?: { text?: string; finish_reason?: string }[]; usage?: { prompt_tokens?: number } };
 			const text = target.api === 'ollama' ? result.response : result.choices?.[0]?.text;
 			const reason = target.api === 'ollama' ? result.done_reason : result.choices?.[0]?.finish_reason;
-			return text === undefined ? undefined : { text, isCutOff: reason === 'length' };
+			const promptTokens = target.api === 'ollama' ? result.prompt_eval_count : result.usage?.prompt_tokens;
+			return text === undefined ? undefined : { text, isCutOff: reason === 'length', promptTokens };
 		} catch (error) {
 			if (isTimedOut) {
 				// A slow answer is not a server that is down: no suggestion this time, and no waiting period
@@ -286,52 +336,152 @@ function getPrefixStart(document: vscode.TextDocument, end: vscode.Position): vs
 		return new vscode.Position(0, 0);
 	}
 	const start = document.positionAt(Math.ceil((endOffset - MAX_PREFIX_CHARS) / PREFIX_STEP_CHARS) * PREFIX_STEP_CHARS);
-	return start.character === 0 || start.line >= end.line ? start : new vscode.Position(start.line + 1, 0);
+	if (start.character === 0 || start.line >= end.line) {
+		return start;
+	}
+	// To the start of the next line, unless this line is so long that hardly anything would be left: a minified file
+	const nextLine = new vscode.Position(start.line + 1, 0);
+	return document.offsetAt(nextLine) - document.offsetAt(start) <= PREFIX_STEP_CHARS ? nextLine : start;
+}
+
+/**
+ * A cautious count of the tokens the model makes of a text. Code makes about one token per four characters, but
+ * digits make one each, and so can symbols and the characters of other scripts. For ordinary code the result is
+ * about twice the real number, which the room in the context allows for. It must not be too low.
+ */
+export function estimateTokens(text: string): number {
+	let tokens = 0;
+	let letters = 0;
+	let wasSpace = false;
+	for (let index = 0; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		if ((code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code === 95) {
+			letters++;
+			wasSpace = false;
+			continue;
+		}
+		if (letters > 0) {
+			tokens += Math.ceil(letters / 2);
+			letters = 0;
+		}
+		if (code === 32 || code === 9 || code === 10 || code === 13) {
+			if (!wasSpace) {
+				tokens += 0.5; // one run of spaces and line breaks is mostly part of the token next to it
+			}
+			wasSpace = true;
+			continue;
+		}
+		wasSpace = false;
+		tokens += code >= 48 && code <= 57 ? 1.15 : code < 128 ? 1 : 1.5;
+	}
+	return Math.ceil(tokens + Math.ceil(letters / 2));
+}
+
+/**
+ * Leaves out what does not fit into the context: first the code from other files, the last one first, then the
+ * oldest lines before the cursor, in the same steps in which that start moves anyway, then half of the code after it.
+ * @param tokensPerEstimate what is known about how the estimate compares to the real count for this file
+ */
+function fitToContext(snippets: IContextSnippet[], prefix: string, suffix: string, budget: number, tokensPerEstimate: number): { snippets: IContextSnippet[]; prefix: string; suffix: string; estimate: number } {
+	const estimate = (parts: IContextSnippet[], before: string, after: string) =>
+		estimateTokens(before) + estimateTokens(after) + parts.reduce((sum, part) => sum + estimateTokens(part.path) + estimateTokens(part.text) + 4, 0) + 16;
+	const fits = (parts: IContextSnippet[], before: string, after: string) => estimate(parts, before, after) * tokensPerEstimate <= budget;
+
+	let parts = snippets;
+	while (parts.length > 0 && !fits(parts, prefix, suffix)) {
+		parts = parts.slice(0, -1);
+	}
+	while (prefix.length > MIN_PREFIX_CHARS && !fits(parts, prefix, suffix)) {
+		const cut = Math.min(PREFIX_STEP_CHARS, prefix.length - MIN_PREFIX_CHARS);
+		const lineBreak = prefix.indexOf('\n', cut);
+		prefix = prefix.slice(lineBreak !== -1 && lineBreak - cut < PREFIX_STEP_CHARS ? lineBreak + 1 : cut);
+	}
+	if (!fits(parts, prefix, suffix)) {
+		suffix = suffix.slice(0, Math.floor(suffix.length / 2));
+	}
+	if (!fits(parts, prefix, suffix)) {
+		// Still too much: text that makes several tokens per character. Take as much before the cursor as surely fits.
+		prefix = prefix.slice(-Math.max(200, Math.floor(budget / 4)));
+		suffix = suffix.slice(0, 100);
+	}
+	return { snippets: parts, prefix, suffix, estimate: estimate(parts, prefix, suffix) };
 }
 
 /**
  * The suggestion as the editor shows it. Closing punctuation right of the cursor, such as a bracket the editor
  * closed by itself, is replaced when the suggestion brings it along: it would be there twice otherwise.
+ *
+ * A model answers in one of two ways. Either with just what is missing, and then what stands right of the cursor
+ * stays. Or with the whole rest of the line, and then that is replaced. Which one it is shows in the line that
+ * results: only one of the two has its brackets and quotes in order.
  * @param start where the suggestion starts: at the cursor, or where the selected entry of the suggestion list starts
  * @param restOfLine what stands right of the cursor on its line
  */
 function toItem(document: vscode.TextDocument, start: vscode.Position, position: vscode.Position, text: string, restOfLine: string): vscode.InlineCompletionItem {
 	const closers = restOfLine.trimEnd();
-	const firstLine = text.split('\n')[0];
 	let end = position;
-	if (closers && firstLine === text) {
-		// As many of the closing characters as the suggestion contains, in their order
-		let covered = 0;
-		let from = 0;
-		for (const character of closers) {
-			const index = firstLine.indexOf(character, from);
-			if (index === -1) {
-				break;
+	if (closers && !text.includes('\n')) {
+		const covered = countCoveredClosers(text, closers);
+		if (covered > 0) {
+			const lineBefore = document.lineAt(start.line).text.slice(0, start.character);
+			const isFineWhenKept = isWellFormed(lineBefore + text + closers);
+			const isFineWhenReplaced = isWellFormed(lineBefore + text + closers.slice(covered));
+			// When the line cannot tell, the closing characters are only taken as the suggestion's own where it ends with them
+			if (isFineWhenReplaced !== isFineWhenKept ? isFineWhenReplaced : text.endsWith(closers.slice(0, covered))) {
+				end = position.translate(0, covered);
 			}
-			covered++;
-			from = index + 1;
-		}
-		// A suggestion like `a) + (b` in front of a `)` means the bracket that is there: then nothing is replaced
-		const lineBefore = document.lineAt(start.line).text.slice(0, start.character);
-		if (covered > 0 && !(isBalanced(lineBefore + text + closers) && !isBalanced(lineBefore + text + closers.slice(covered)))) {
-			end = position.translate(0, covered);
 		}
 	}
 	return new vscode.InlineCompletionItem(text, new vscode.Range(start, end));
 }
 
-/** Whether every bracket in the text is closed, and none is closed that was not opened. */
-function isBalanced(text: string): boolean {
+/**
+ * How many of the closing characters right of the cursor the suggestion contains, in their order. A character
+ * inside brackets that the suggestion opened itself is not one of them: the comma in `getName(a, b)` is not the
+ * comma that ends the entry.
+ */
+function countCoveredClosers(text: string, closers: string): number {
+	let covered = 0;
+	let depth = 0;
+	for (const character of text) {
+		if (covered === closers.length) {
+			break;
+		}
+		if (character === '(' || character === '[' || character === '{') {
+			depth++;
+		} else if (character === ')' || character === ']' || character === '}') {
+			depth--;
+			if (depth < 0) {
+				// It closes a bracket from before the cursor. What follows is on the level of the cursor again.
+				depth = 0;
+				if (character === closers[covered]) {
+					covered++;
+				}
+			}
+		} else if (depth === 0 && character === closers[covered]) {
+			covered++;
+		}
+	}
+	return covered;
+}
+
+/** Whether every bracket in the text is closed, none is closed that was not opened, and no quote is left open. */
+function isWellFormed(text: string): boolean {
 	const closing: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
 	const open: string[] = [];
+	const quotes: Record<string, number> = { '\'': 0, '"': 0, '`': 0 };
 	for (const character of text) {
 		if (character === '(' || character === '[' || character === '{') {
 			open.push(character);
-		} else if (closing[character] !== undefined && open.pop() !== closing[character]) {
-			return false;
+		} else if (closing[character] !== undefined) {
+			if (open.pop() !== closing[character]) {
+				return false;
+			}
+		} else if (quotes[character] !== undefined) {
+			quotes[character]++;
 		}
 	}
-	return open.length === 0;
+	return open.length === 0 && quotes['\''] % 2 === 0 && quotes['"'] % 2 === 0 && quotes['`'] % 2 === 0;
 }
 
 /**
@@ -354,7 +504,8 @@ function cleanUp(answer: IAnswer, suffix: string, singleLine: boolean): string {
 	const nextLines = suffix.split('\n').map(line => line.trim()).filter(line => line.length > 0);
 	const lines = completion.split('\n');
 	const written = lines.map((line, index) => ({ text: line.trim(), index })).filter(line => line.text.length > 0);
-	for (let count = Math.min(written.length - 1, nextLines.length); count > 0; count--) {
+	// All of it can be a repetition too: then there is nothing to offer
+	for (let count = Math.min(written.length, nextLines.length); count > 0; count--) {
 		const tail = written.slice(written.length - count);
 		if (tail.every((line, position) => line.text === nextLines[position])) {
 			lines.length = tail[0].index;

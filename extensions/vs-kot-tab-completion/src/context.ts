@@ -42,7 +42,16 @@ const MAX_LANGUAGE_SERVICE_LOOKUPS = 12;
 const LOOKUP_VALID_MS = 5 * 60 * 1000;
 
 /** Files that are never shown to a model, wherever it runs. */
-const NEVER_SHARE = /(^|\/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|keystore)|id_(rsa|dsa|ecdsa|ed25519)|\.npmrc|\.netrc|credentials(\..*)?|secrets?(\..*)?)$/i;
+const NEVER_SHARE = new RegExp([
+	// a folder that holds secrets, anywhere in the path
+	String.raw`(^|/)(secrets?|\.ssh|\.aws|\.gnupg|\.kube)/`,
+	// environment files: .env, .env.local, .env-production, prod.env, .envrc
+	String.raw`(^|/)(\.env([.-][^/]*)?|\.envrc|[^/]*\.env)$`,
+	// keys and key stores
+	String.raw`(^|/)([^/]*\.(pem|key|p12|pfx|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519))$`,
+	// files that tools keep credentials in
+	String.raw`(^|/)(\.npmrc|\.netrc|\.pypirc|\.pgpass|\.git-credentials|credentials(\.[^/]*)?|secrets?(\.[^/]*)?|[^/]*\.tfvars)$`
+].join('|'), 'i');
 
 const JS_FAMILY = new Set(['typescript', 'typescriptreact', 'javascript', 'javascriptreact']);
 const JS_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.d.ts', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
@@ -154,7 +163,8 @@ export class ContextCollector implements vscode.Disposable {
 			const wanted = getWords(around);
 			const candidates: { similarity: number; snippet: IContextSnippet }[] = [];
 			for (const other of this._recent) {
-				if (used.has(other.toString()) || NEVER_SHARE.test(other.path)) {
+				// Only from the project: a file from somewhere else that happens to be open is none of the model's business
+				if (used.has(other.toString()) || NEVER_SHARE.test(other.path) || !vscode.workspace.getWorkspaceFolder(other)) {
 					continue;
 				}
 				const otherDocument = vscode.workspace.textDocuments.find(candidate => candidate.uri.toString() === other.toString());
@@ -363,7 +373,8 @@ function pickDefinitions(text: string, names: string[], budget: number): string 
 	const taken = new Set<number>();
 	for (const name of names) {
 		const definition = new RegExp(`\\b(?:export|function|class|interface|type|enum|const|let|var|def)\\b[^\\n]*\\b${escapeRegExp(name)}\\b`);
-		const start = lines.findIndex((line, index) => !taken.has(index) && definition.test(line));
+		// A line of thousands of characters is a minified file: nothing to learn a name from, and slow to search
+		const start = lines.findIndex((line, index) => !taken.has(index) && line.length <= 2000 && definition.test(line));
 		if (start === -1) {
 			continue;
 		}

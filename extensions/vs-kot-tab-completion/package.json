@@ -74,37 +74,44 @@
 						"%configuration.api.openai%"
 					],
 					"default": "ollama",
-					"description": "%configuration.api%"
+					"description": "%configuration.api%",
+					"scope": "application"
 				},
 				"tabCompletion.endpoint": {
 					"type": "string",
 					"default": "",
-					"description": "%configuration.endpoint%"
+					"description": "%configuration.endpoint%",
+					"scope": "application"
 				},
 				"tabCompletion.model": {
 					"type": "string",
 					"default": "",
-					"description": "%configuration.model%"
+					"description": "%configuration.model%",
+					"scope": "application"
 				},
 				"tabCompletion.useOtherFiles": {
 					"type": "boolean",
 					"default": true,
-					"description": "%configuration.useOtherFiles%"
+					"description": "%configuration.useOtherFiles%",
+					"scope": "application"
 				},
 				"tabCompletion.promptTemplate": {
 					"type": "string",
 					"default": "<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>",
-					"description": "%configuration.promptTemplate%"
+					"description": "%configuration.promptTemplate%",
+					"scope": "application"
 				},
 				"tabCompletion.fileSeparator": {
 					"type": "string",
 					"default": "<|file_sep|>",
-					"description": "%configuration.fileSeparator%"
+					"description": "%configuration.fileSeparator%",
+					"scope": "application"
 				},
 				"tabCompletion.repositoryMarker": {
 					"type": "string",
 					"default": "<|repo_name|>",
-					"description": "%configuration.repositoryMarker%"
+					"description": "%configuration.repositoryMarker%",
+					"scope": "application"
 				},
 				"tabCompletion.stop": {
 					"type": "array",
@@ -122,17 +129,18 @@
 						"<|im_start|>",
 						"<|im_end|>"
 					],
-					"description": "%configuration.stop%"
+					"description": "%configuration.stop%",
+					"scope": "application"
 				},
 				"tabCompletion.maxTokens": {
-					"type": "number",
+					"type": "integer",
 					"default": 128,
 					"minimum": 8,
 					"maximum": 512,
 					"description": "%configuration.maxTokens%"
 				},
 				"tabCompletion.debounce": {
-					"type": "number",
+					"type": "integer",
 					"default": 150,
 					"minimum": 0,
 					"maximum": 2000,

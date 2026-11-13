@@ -15,6 +15,8 @@ import { ICompletionTarget, TabCompletionProvider } from './provider';
 import { StatusReporter } from './statusReport';
 
 const SETUP_OFFERED_KEY = 'tabCompletion.setUpOffered';
+/** How long after a failed start of the model server the next keystroke may try again. */
+const RETRY_AFTER_FAILURE_MS = 20_000;
 
 export function activate(context: vscode.ExtensionContext): void {
 	const log = vscode.window.createOutputChannel(vscode.l10n.t('Tab Completion'), { log: true });
@@ -23,13 +25,19 @@ export function activate(context: vscode.ExtensionContext): void {
 	/** An endpoint in the settings means a server of the user's own, and nothing is managed here. */
 	const getExternalEndpoint = () => vscode.workspace.getConfiguration('tabCompletion').get<string>('endpoint', '').trim().replace(/\/+$/, '');
 
+	let lastRetry = 0;
 	const getTarget = (): ICompletionTarget | undefined => {
 		const configuration = vscode.workspace.getConfiguration('tabCompletion');
 		const external = getExternalEndpoint();
 		if (external) {
 			return { url: external, api: configuration.get<'ollama' | 'openai'>('api', 'ollama'), model: configuration.get<string>('model', '').trim() || server.model };
 		}
-		return server.state.kind === 'ready' ? { url: server.endpoint, api: 'ollama', model: server.model } : undefined;
+		if (server.state.kind === 'failed' && Date.now() - lastRetry > RETRY_AFTER_FAILURE_MS) {
+			// What made the server fail may be over. Someone who types on gets it back without having to click anything.
+			lastRetry = Date.now();
+			server.initialize();
+		}
+		return server.state.kind === 'ready' ? { url: server.endpoint, api: 'ollama', model: server.model, prepare: () => server.prepare(), noteUse: () => server.noteUse() } : undefined;
 	};
 
 	const contextCollector = new ContextCollector(log);
@@ -162,7 +170,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		// Feeds the Tab Completion view in the side bar and the colour of its icon
 		new StatusReporter(server, provider, getExternalEndpoint),
 		vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, provider),
-		server.onDidChangeState(() => updateStatus()),
+		server.onDidChangeState(state => {
+			if (state.kind === 'ready') {
+				// Whatever went wrong with the server before is over: no waiting period, and failures count anew
+				provider.reset();
+			}
+			updateStatus();
+		}),
 		provider.onDidChangeReachable(isReachable => {
 			updateStatus();
 			// The editor's own server may have been stopped: bring it back
