@@ -39,7 +39,9 @@ const serverLog = () => { try { return fs.readFileSync(path.join(isolated.VS_KOT
 const requestsAtServer = () => serverLog().filter(l => l.includes('[GIN]') && l.includes('/api/generate')).length;
 /** How many tokens the model had to read for the request it answered last, and how long that took. */
 const lastRead = () => { const read = /prompt eval time =\s*(?<ms>[\d.]+) ms \/\s*(?<tokens>\d+) tokens/.exec(serverLog().filter(l => l.includes('prompt eval time')).at(-1) ?? ''); return { tokens: Number(read?.groups?.tokens ?? NaN), ms: Math.round(Number(read?.groups?.ms ?? NaN)) }; };
-const results: boolean[] = []; const check = (name: string, ok: boolean, detail: string) => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}  — ${detail}`); };
+/** In how many requests a place was read ahead that the cursor rested at long enough. */
+let piecesOfAPlace = 4;
+const results: boolean[] = []; const check =(name: string, ok: boolean, detail: string) => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}  — ${detail}`); };
 /** What tab completion wrote into its log about reading ahead. */
 const logLines = () => {
 	const lines: string[] = [];
@@ -88,6 +90,7 @@ const logLines = () => {
 		before = requestsAtServer();
 		await goTo(620); await sleep(6000);
 		const atRest = requestsAtServer() - before;
+		piecesOfAPlace = atRest;
 		const rested = await typeLine(line, 30);
 		check('the cursor rests at a new place after typing: the server reads the code there', atRest >= 2, `${atRest} request(s) reached the server while nothing was typed`);
 		check('typing there afterwards sends the request for the suggestion and no more', rested.hasSuggestion && rested.requests <= 3, `${rested.requests} request(s), suggestion ${rested.ms} ms after the last key`);
@@ -96,10 +99,11 @@ const logLines = () => {
 		await goTo(480);
 		const hesitant = await typeLine('const lineCount = this.', 260);
 
-		// The cursor rests just long enough for reading to start, and goes back to the place before. The model server
-		// kept a copy of what it read there, but with the little it has at hand of the place that was left, it does
-		// not look for that copy: the place has to be read again.
-		await goTo(900); await sleep(700);
+		// The cursor rests just long enough for reading to start, and leaves with one key, for the top of the file,
+		// where there is nothing to read: a small model has read a place within a second. Then back to the place
+		// before. The model server kept a copy of what it read there, but with the little it has at hand of the
+		// place that was left, it does not look for that copy: the place has to be read again.
+		await goTo(900); await sleep(550); await page.keyboard.press('Meta+ArrowUp'); await sleep(1500);
 		before = requestsAtServer();
 		await goTo(482); await sleep(5000);
 		const readAgain = requestsAtServer() - before;
@@ -130,7 +134,7 @@ const logLines = () => {
 	stopIsolatedModelServer();
 	// the place the cursor left after 0.7 seconds, as tab completion logged it
 	const left = logLines().map(l => /reading ahead ended after (?<pieces>\d+) piece\(s\): the cursor went on/.exec(l)?.groups?.pieces).filter(Boolean).map(Number);
-	check('the cursor moves on: reading ahead ends with the piece it is at', left.length > 0 && left.every(pieces => pieces <= 2), `ended after ${left.join(', ') || 'no'} piece(s); a place that is read to its end takes 4 or more`);
+	check('the cursor moves on: reading ahead ends with the piece it is at', left.length > 0 && left.every(pieces => pieces < piecesOfAPlace), `ended after ${left.join(', ') || 'no'} piece(s); a place that is read to its end takes ${piecesOfAPlace}`);
 	const log = logLines();
 	for (const l of log.filter(l => /read(ing)? ahead/.test(l))) { console.log('   log: ' + l.replace(/^\S+ \S+ /, '').slice(0, 200)); }
 	console.log('   other files in the prompts: ' + ([...new Set(log.map(l => /(?<count>\d+) other files/.exec(l)?.groups?.count).filter(Boolean))].join(', ') || 'not logged'));

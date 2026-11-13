@@ -243,8 +243,11 @@ export class TabCompletionView extends ViewPane {
 
 	private renderModel(status: ITabCompletionStatus): void {
 		const installed = status.installedModels.find(model => model.name === status.model);
-		if (status.isModelAutomatic) {
-			this.modelHint.textContent = localize('model.automatic.hint', "The editor picks a model that fits the memory of this computer.");
+		const standard = status.offeredModels.at(0)?.name;
+		if (status.isModelAutomatic && standard !== undefined && status.model !== standard) {
+			this.modelHint.textContent = localize('model.standIn.hint', "This computer was set up with {0}, which is used until the standard model {1} is downloaded. Choose it below to switch.", status.model, standard);
+		} else if (status.isModelAutomatic) {
+			this.modelHint.textContent = localize('model.standard.hint', "The standard model: small, and quick to answer.");
 		} else if (installed?.size !== undefined) {
 			this.modelHint.textContent = localize('model.size.hint', "{0} on disk.", formatSize(installed.size));
 		} else if (!installed && status.server === 'managed') {
@@ -255,7 +258,7 @@ export class TabCompletionView extends ViewPane {
 
 		const options = this.getModelOptions(status);
 		const selected = Math.max(0, options.findIndex(option => status.isModelAutomatic ? option.value === '' : option.value === status.model));
-		const key = JSON.stringify([options.map(option => [option.item.text, option.item.decoratorRight]), selected]);
+		const key = JSON.stringify([options.map(option => [option.item.text, option.item.detail, option.item.decoratorRight]), selected]);
 		if (this.modelSelectKey === key) {
 			return;
 		}
@@ -282,11 +285,21 @@ export class TabCompletionView extends ViewPane {
 			value: ''
 		}];
 
+		const notDownloaded = localize('model.notDownloaded', "Not Downloaded");
+		const isInstalled = (name: string) => status.installedModels.some(model => model.name === name);
+		const describe = (name: string) => status.offeredModels.find(model => model.name === name)?.description;
+
 		for (const model of status.installedModels) {
-			options.push({ item: { text: model.name, decoratorRight: model.size === undefined ? undefined : formatSize(model.size) }, value: model.name });
+			options.push({ item: { text: model.name, detail: describe(model.name), decoratorRight: model.size === undefined ? undefined : formatSize(model.size) }, value: model.name });
 		}
-		if (!status.isModelAutomatic && !status.installedModels.some(model => model.name === status.model)) {
-			options.push({ item: { text: status.model, decoratorRight: status.server === 'managed' ? localize('model.notDownloaded', "Not Downloaded") : undefined }, value: status.model });
+		// What the editor offers and this computer does not have yet. Choosing one leads to Set Up, which downloads it.
+		for (const model of status.offeredModels) {
+			if (!isInstalled(model.name)) {
+				options.push({ item: { text: model.name, detail: model.description, decoratorRight: notDownloaded }, value: model.name });
+			}
+		}
+		if (!status.isModelAutomatic && !isInstalled(status.model) && !status.offeredModels.some(model => model.name === status.model)) {
+			options.push({ item: { text: status.model, decoratorRight: status.server === 'managed' ? notDownloaded : undefined }, value: status.model });
 		}
 
 		options.push({ item: { text: localize('model.other', "Other Model...") } });

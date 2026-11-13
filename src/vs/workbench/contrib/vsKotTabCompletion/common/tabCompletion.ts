@@ -59,8 +59,10 @@ export type TabCompletionState = typeof tabCompletionStates[number];
 
 export interface ITabCompletionModel {
 	readonly name: string;
-	/** Size on disk in bytes, when the model server tells. */
+	/** Size on disk in bytes, when the model server tells. For a model on offer, the size of its download. */
 	readonly size?: number;
+	/** A word or two on what a model on offer is good for. Already in the user's language. */
+	readonly description?: string;
 }
 
 export interface ITabCompletionStatus {
@@ -80,6 +82,11 @@ export interface ITabCompletionStatus {
 	readonly isModelAutomatic: boolean;
 	/** The models the model server has, as far as it could be asked. */
 	readonly installedModels: readonly ITabCompletionModel[];
+	/**
+	 * The models the editor offers to choose from, whether they are on this computer or not. The first one is
+	 * what the editor picks when the setting is empty. None with a model server from the settings.
+	 */
+	readonly offeredModels: readonly ITabCompletionModel[];
 }
 
 /**
@@ -96,15 +103,18 @@ export function parseTabCompletionStatus(value: unknown): ITabCompletionStatus |
 		return undefined;
 	}
 
-	const installedModels: ITabCompletionModel[] = [];
-	if (Array.isArray(candidate.installedModels)) {
-		for (const model of candidate.installedModels) {
-			if (isObject(model) && isString((model as { name?: unknown }).name)) {
-				const { name, size } = model as { name: string; size?: unknown };
-				installedModels.push({ name, size: typeof size === 'number' ? size : undefined });
+	const parseModels = (models: unknown) => {
+		const parsed: ITabCompletionModel[] = [];
+		if (Array.isArray(models)) {
+			for (const model of models) {
+				if (isObject(model) && isString((model as { name?: unknown }).name)) {
+					const { name, size, description } = model as { name: string; size?: unknown; description?: unknown };
+					parsed.push({ name, size: typeof size === 'number' ? size : undefined, description: isString(description) ? description : undefined });
+				}
 			}
 		}
-	}
+		return parsed;
+	};
 
 	return {
 		enabled: candidate.enabled,
@@ -115,7 +125,8 @@ export function parseTabCompletionStatus(value: unknown): ITabCompletionStatus |
 		endpoint: candidate.endpoint,
 		model: candidate.model,
 		isModelAutomatic: candidate.isModelAutomatic === true,
-		installedModels
+		installedModels: parseModels(candidate.installedModels),
+		offeredModels: parseModels(candidate.offeredModels)
 	};
 }
 

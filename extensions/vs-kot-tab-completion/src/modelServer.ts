@@ -35,16 +35,23 @@ const LAUNCH_VERSION = 2;
 const LEGACY_ROOT = path.join(os.homedir(), '.vs-claude', 'tab-completion');
 
 /**
- * The model the editor uses unless another one is set: Qwen2.5-Coder 7B in its base variant. Qwen names the base
- * models, not the "instruct" ones that Ollama's plain tags such as `qwen2.5-coder:7b` stand for, as the ones for
+ * The model the editor uses unless another one is set: Qwen2.5-Coder 1.5B in its base variant. Qwen names the base
+ * models, not the "instruct" ones that Ollama's plain tags such as `qwen2.5-coder:1.5b` stand for, as the ones for
  * completion and fill-in, and on real code the base variant completes more lines exactly as they were written.
- * Under the Apache 2.0 license.
+ * It is the small one of the two models on offer: a suggestion that comes while the thought is still there is
+ * worth more than a somewhat better one that comes seconds later. Under the Apache 2.0 license.
  */
-const DEFAULT_MODEL = 'qwen2.5-coder:7b-base';
-/** What a Mac with little memory gets instead: the same model family at a fifth of the size. */
-const MODEL_FOR_SMALL_MEMORY = 'qwen2.5-coder:1.5b-base';
-/** Below this, the 7B model (about 5.5 GB in memory) leaves too little room for everything else. */
+const DEFAULT_MODEL = 'qwen2.5-coder:1.5b-base';
+/**
+ * The larger model of the same family, on offer beside the default. It completes somewhat more lines exactly as
+ * they were written, and takes several times as long for each. It was the default up to release 0.5.3: a computer
+ * that was set up until then has this model and not the default, see `_standIn`.
+ */
+const LARGER_MODEL = 'qwen2.5-coder:7b-base';
+/** Below this, the larger model (about 5.5 GB in memory) leaves too little room for everything else, and is not offered. */
 const SMALL_MEMORY_BYTES = 16 * 1024 ** 3;
+/** How often a window that uses the larger model in place of the default looks whether the default has arrived. */
+const STAND_IN_CHECK_INTERVAL_MS = 60_000;
 /** Download sizes of the models that are worth choosing, to say beforehand how much setting up downloads. */
 const KNOWN_MODEL_SIZES: Record<string, number> = {
 	'qwen2.5-coder:7b-base': 4_700_000_000,
@@ -129,6 +136,16 @@ export class ManagedModelServer implements vscode.Disposable {
 	private _lastUse = 0;
 	private _loading: Promise<void> | undefined;
 
+	/**
+	 * The model that is used in place of the default while the default is not on this computer: the larger model,
+	 * on a computer that was set up when that was the default. Tab completion goes on working there after an update
+	 * of the editor, without a download that nobody asked for. Moving to the default is offered once.
+	 */
+	private _standIn: string | undefined;
+	private _standInChecked = 0;
+	/** Whether the default was asked for, so that nothing stands in for it and it is downloaded instead. */
+	private _wantsDefault = false;
+
 	constructor(private readonly _log: vscode.LogOutputChannel) {
 		// A fixed folder in the home directory: the source build, the installed app and every profile share one download.
 		// Tests point both the folder and the port somewhere else, to run a server of their own next to the real one.
@@ -152,19 +169,54 @@ export class ManagedModelServer implements vscode.Disposable {
 		return this._state;
 	}
 
-	/** The model in use: the configured one, or else the default, or its small sibling on a Mac with little memory. */
+	/** The model in use: the one from the settings, or else the default, or what stands in for the default. */
 	get model(): string {
-		const configured = vscode.workspace.getConfiguration('tabCompletion').get<string>('model', '').trim();
-		if (configured) {
-			return configured;
+		return this._configuredModel || this._standIn || DEFAULT_MODEL;
+	}
+
+	private get _configuredModel(): string {
+		return vscode.workspace.getConfiguration('tabCompletion').get<string>('model', '').trim();
+	}
+
+	/** The model that is used when none is set, and how much there is to download for it. */
+	get defaultModel(): { readonly name: string; readonly downloadSize: number } {
+		return { name: DEFAULT_MODEL, downloadSize: KNOWN_MODEL_SIZES[DEFAULT_MODEL] };
+	}
+
+	/** Whether another model is used in place of the default, because the default is not on this computer yet. */
+	get isDefaultPending(): boolean {
+		return !this._configuredModel && this._standIn !== undefined;
+	}
+
+	/**
+	 * The models that are on offer on this computer, the default first: what to choose from without knowing the
+	 * names of models. Any other model can still be named in the settings.
+	 */
+	get offeredModels(): readonly { readonly name: string; readonly size: number; readonly description: string }[] {
+		const offered = [{ name: DEFAULT_MODEL, size: KNOWN_MODEL_SIZES[DEFAULT_MODEL], description: vscode.l10n.t('Quick') }];
+		if (os.totalmem() >= SMALL_MEMORY_BYTES) {
+			offered.push({ name: LARGER_MODEL, size: KNOWN_MODEL_SIZES[LARGER_MODEL], description: vscode.l10n.t('More Exact, Slower') });
 		}
-		return os.totalmem() < SMALL_MEMORY_BYTES ? MODEL_FOR_SMALL_MEMORY : DEFAULT_MODEL;
+		return offered;
 	}
 
 	/** How much setting up still has to download, in bytes. `undefined` when the size of the model is not known. */
 	async getPendingDownloadSize(): Promise<number | undefined> {
 		const modelSize = KNOWN_MODEL_SIZES[this.model];
 		return modelSize === undefined ? undefined : modelSize + (await this._isInstalled() ? 0 : RUNTIME.downloadSize);
+	}
+
+	/**
+	 * Decides what is used when no model is set and the default is not on this computer. The model server has to
+	 * be up for it.
+	 */
+	private async _pickStandIn(): Promise<void> {
+		this._standIn = undefined;
+		this._standInChecked = Date.now();
+		if (!this._configuredModel && !this._wantsDefault && !await this._hasModel(DEFAULT_MODEL) && await this._hasModel(LARGER_MODEL)) {
+			this._standIn = LARGER_MODEL;
+			this._log.info(`The default model ${DEFAULT_MODEL} is not on this computer. ${LARGER_MODEL} is used until it is.`);
+		}
 	}
 
 	private get _runtimeDir(): string {
@@ -211,6 +263,7 @@ export class ManagedModelServer implements vscode.Disposable {
 			const started = Date.now();
 			this._setState({ kind: 'starting' });
 			await this._start();
+			await this._pickStandIn();
 			if (!await this._hasModel()) {
 				this._setState({ kind: 'needsSetup' });
 				return;
@@ -223,9 +276,10 @@ export class ManagedModelServer implements vscode.Disposable {
 
 	/**
 	 * Downloads what is missing, starts the server and loads the model.
+	 * @param getDefault whether the default model is wanted where another one stands in for it, see `_standIn`
 	 * @returns whether tab completion is ready afterwards. `false` also when the user cancelled.
 	 */
-	async setUp(token: vscode.CancellationToken): Promise<boolean> {
+	async setUp(token: vscode.CancellationToken, getDefault = false): Promise<boolean> {
 		await this._run(async () => {
 			if (this._state.kind === 'unsupported') {
 				return;
@@ -233,6 +287,7 @@ export class ManagedModelServer implements vscode.Disposable {
 
 			const abort = new AbortController();
 			const cancellation = token.onCancellationRequested(() => abort.abort());
+			this._wantsDefault ||= getDefault;
 			try {
 				await this._adoptLegacyFolder();
 				await fs.promises.rm(this._stoppedFile, { force: true });
@@ -242,6 +297,7 @@ export class ManagedModelServer implements vscode.Disposable {
 				}
 				this._setState({ kind: 'settingUp', step: vscode.l10n.t('Starting the model server'), percent: undefined });
 				await this._start();
+				await this._pickStandIn();
 				if (!await this._hasModel()) {
 					const modelSize = KNOWN_MODEL_SIZES[this.model];
 					if (modelSize !== undefined) {
@@ -253,6 +309,7 @@ export class ManagedModelServer implements vscode.Disposable {
 				await this._loadModel();
 				this._setState({ kind: 'ready' });
 			} catch (error) {
+				this._wantsDefault = false; // what stood in for the default does so again
 				if (token.isCancellationRequested) {
 					this._log.info('Setup cancelled. A model that was downloaded in part is continued next time.');
 					this._setState({ kind: 'needsSetup' });
@@ -295,7 +352,21 @@ export class ManagedModelServer implements vscode.Disposable {
 	 * memory. Loading it takes seconds, and a request that typing cancels must not be what it hangs on.
 	 */
 	async prepare(): Promise<void> {
-		if (this._state.kind !== 'ready' || Date.now() - this._lastUse < RELOAD_AFTER_IDLE_MS) {
+		if (this._state.kind !== 'ready') {
+			return;
+		}
+		if (this._standIn !== undefined && Date.now() - this._standInChecked > STAND_IN_CHECK_INTERVAL_MS) {
+			// Another window may have downloaded the default meanwhile. Two windows with two models would have the
+			// model server swap them in memory with every change of window.
+			this._standInChecked = Date.now();
+			if (await this._hasModel(DEFAULT_MODEL).catch(() => false)) {
+				this._log.info(`The default model ${DEFAULT_MODEL} is on this computer now, and is used from here on.`);
+				this._standIn = undefined;
+				this._lastUse = 0;
+				this._onDidChangeState.fire(this._state);
+			}
+		}
+		if (Date.now() - this._lastUse < RELOAD_AFTER_IDLE_MS) {
 			return;
 		}
 		this._loading ??= this._loadModel().catch(error => {
@@ -747,13 +818,14 @@ export class ManagedModelServer implements vscode.Disposable {
 		}
 	}
 
-	private async _hasModel(): Promise<boolean> {
+	/** Whether the model server has a model: the one in use, unless another one is named. */
+	private async _hasModel(name = this.model): Promise<boolean> {
 		const response = await fetch(`${this.endpoint}/api/tags`, { signal: AbortSignal.timeout(5000) });
 		if (!response.ok) {
 			return false;
 		}
 		const tags = await response.json() as { models?: { name: string }[] };
-		return (tags.models ?? []).some(model => model.name === this.model);
+		return (tags.models ?? []).some(model => model.name === name);
 	}
 
 	/**

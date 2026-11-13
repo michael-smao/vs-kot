@@ -24,6 +24,8 @@ const RETRY_INTERVAL_MS = 60_000;
 interface IModel {
 	readonly name: string;
 	readonly size?: number;
+	/** A word or two on what the model is good for, for a model that is on offer. */
+	readonly description?: string;
 }
 
 /** The same shape as `ITabCompletionStatus` in the workbench. */
@@ -37,6 +39,7 @@ interface IStatusReport {
 	readonly model: string;
 	readonly isModelAutomatic: boolean;
 	readonly installedModels: readonly IModel[];
+	readonly offeredModels: readonly IModel[];
 }
 
 export class StatusReporter implements vscode.Disposable {
@@ -130,7 +133,8 @@ export class StatusReporter implements vscode.Disposable {
 			endpoint: external,
 			model: this._server.model,
 			isModelAutomatic: !configuration.get<string>('model', '').trim(),
-			installedModels: this._models
+			installedModels: this._models,
+			offeredModels: [] // what a server of one's own has is all there is to choose from
 		} : {
 			enabled: configuration.get('enabled', true),
 			server: 'managed',
@@ -140,7 +144,8 @@ export class StatusReporter implements vscode.Disposable {
 			endpoint: this._server.endpoint,
 			model: this._server.model,
 			isModelAutomatic: !configuration.get<string>('model', '').trim(),
-			installedModels: this._models
+			installedModels: this._models,
+			offeredModels: this._server.offeredModels
 		};
 
 		// An editor without the view has no such command, and nothing is lost then

@@ -45,7 +45,7 @@ The chat and Copilot features that upstream ships are switched off and locked. T
 
 While you type, the editor suggests the rest of the line or a small block, and `Tab` accepts it.
 
-- On first use the editor offers to download what it needs: the [Ollama](https://ollama.com) model server and the Qwen2.5-Coder 7B base model (about 4.7 GB), or the 1.5B model on a Mac with less than 16 GB of memory. Everything is kept in `~/.vs-kot/tab-completion`, and the server listens on this computer only.
+- On first use the editor offers to download what it needs: the [Ollama](https://ollama.com) model server and the Qwen2.5-Coder 1.5B base model (about 1 GB), which is small and quick to answer. The larger 7B model (about 4.7 GB) completes somewhat more lines exactly right and takes several times as long; on a Mac with 16 GB of memory or more it can be chosen in the Tab Completion view. Everything is kept in `~/.vs-kot/tab-completion`, and the server listens on this computer only.
 - Suggestions use the real names from your project: the model also sees the definitions the current file imports and similar code from other open files.
 - Files that usually hold secrets, such as `.env` files and keys, are never shown to a model.
 - The Tab Completion view in the activity bar shows the state of the model server and lets you pick the model. Its icon is green when everything works and red when something needs attention.

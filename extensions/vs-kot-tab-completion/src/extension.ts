@@ -16,6 +16,7 @@ import { StatusReporter } from './statusReport';
 import { CountedTabCompletionProvider, UsageStatistics } from './usage';
 
 const SETUP_OFFERED_KEY = 'tabCompletion.setUpOffered';
+const DEFAULT_MODEL_OFFERED_KEY = 'tabCompletion.defaultModelOffered';
 /** How long after a failed start of the model server the next keystroke may try again. */
 const RETRY_AFTER_FAILURE_MS = 20_000;
 
@@ -104,7 +105,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	// --- setting up
 
 	let isSettingUp = false;
-	const setUp = async () => {
+	/** @param getDefault whether the default model is to be downloaded where another model is used in its place */
+	const setUp = async (getDefault = false) => {
 		if (getExternalEndpoint()) {
 			vscode.window.showInformationMessage(vscode.l10n.t('Tab Completion uses the model server from the settings. There is nothing to set up.'));
 			return;
@@ -126,13 +128,15 @@ export function activate(context: vscode.ExtensionContext): void {
 					}
 				});
 				try {
-					return await server.setUp(token);
+					return await server.setUp(token, getDefault);
 				} finally {
 					listener.dispose();
 				}
 			});
 
-			if (isReady) {
+			if (!isReady && getDefault && server.state.kind === 'needsSetup') {
+				await server.initialize(); // cancelled: on with the model that is there
+			} else if (isReady) {
 				vscode.window.showInformationMessage(vscode.l10n.t('Tab Completion is ready. Suggestions appear as you type, and Tab accepts them.'));
 			} else if (server.state.kind === 'failed') {
 				const showLog = vscode.l10n.t('Show Log');
@@ -161,6 +165,30 @@ export function activate(context: vscode.ExtensionContext): void {
 		const choice = await vscode.window.showInformationMessage(message, setUpChoice, vscode.l10n.t('Not Now'));
 		if (choice === setUpChoice) {
 			await setUp();
+		}
+	};
+
+	/**
+	 * Asks once on a computer that was set up when the larger model was the default. Tab completion works on with
+	 * that model there; moving to the default takes a download, and that is for the user to say.
+	 */
+	const offerDefaultModel = async () => {
+		if (getExternalEndpoint() || !server.isDefaultPending || server.state.kind !== 'ready' || context.globalState.get(DEFAULT_MODEL_OFFERED_KEY)) {
+			return;
+		}
+		await context.globalState.update(DEFAULT_MODEL_OFFERED_KEY, true);
+
+		const current = server.model;
+		const switchChoice = vscode.l10n.t('Switch');
+		const keepChoice = vscode.l10n.t('Keep Current Model');
+		const choice = await vscode.window.showInformationMessage(
+			vscode.l10n.t('Tab Completion has a new standard model, {0}: smaller, and several times quicker to answer. This Mac still uses {1}. Switching downloads about {2} GB. Both stay on offer in the Tab Completion view.', server.defaultModel.name, current, toGigabytes(server.defaultModel.downloadSize)),
+			switchChoice, keepChoice);
+		if (choice === switchChoice) {
+			await setUp(true);
+		} else if (choice === keepChoice) {
+			// Said in the settings, it stays the choice of the user whatever the default becomes
+			await vscode.workspace.getConfiguration('tabCompletion').update('model', current, vscode.ConfigurationTarget.Global);
 		}
 	};
 
@@ -200,7 +228,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				}
 			}
 		}),
-		vscode.commands.registerCommand('tabCompletion.setUp', setUp),
+		vscode.commands.registerCommand('tabCompletion.setUp', () => setUp()),
 		vscode.commands.registerCommand('tabCompletion.toggle', async () => {
 			const configuration = vscode.workspace.getConfiguration('tabCompletion');
 			await configuration.update('enabled', !configuration.get('enabled', true), vscode.ConfigurationTarget.Global);
@@ -213,6 +241,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	statusItem.show();
 
 	if (!getExternalEndpoint()) {
-		server.initialize().then(() => offerSetUp());
+		server.initialize().then(async () => {
+			await offerSetUp();
+			await offerDefaultModel();
+		});
 	}
 }

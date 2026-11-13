@@ -11,7 +11,7 @@ import { formatTabCompletionAcceptRate, ITabCompletionUsage, parseTabCompletionU
 suite('vs-kot tab completion status', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	const ready: ITabCompletionStatus = { enabled: true, server: 'managed', state: 'ready', message: undefined, percent: undefined, endpoint: 'http://127.0.0.1:11535', model: 'qwen2.5-coder:7b', isModelAutomatic: true, installedModels: [] };
+	const ready: ITabCompletionStatus = { enabled: true, server: 'managed', state: 'ready', message: undefined, percent: undefined, endpoint: 'http://127.0.0.1:11535', model: 'qwen2.5-coder:7b', isModelAutomatic: true, installedModels: [], offeredModels: [] };
 
 	test('each state has a colour and a first thing to do', () => {
 		const summarize = (status: ITabCompletionStatus | undefined) => {
@@ -40,12 +40,14 @@ suite('vs-kot tab completion status', () => {
 
 	test('a report is taken over field by field, and an incomplete one is dropped', () => {
 		assert.deepStrictEqual({
-			complete: parseTabCompletionStatus({ ...ready, percent: 250, installedModels: [{ name: 'a', size: 5 }, { name: 'b', size: 'big' }, { size: 1 }, 'c'], somethingElse: true }),
+			complete: parseTabCompletionStatus({ ...ready, percent: 250, installedModels: [{ name: 'a', size: 5 }, { name: 'b', size: 'big' }, { size: 1 }, 'c'], offeredModels: [{ name: 'a', size: 4, description: 'Quick' }, { name: 'd', description: 7 }], somethingElse: true }),
+			fromAnOlderExtension: parseTabCompletionStatus({ ...ready, offeredModels: undefined }),
 			unknownState: parseTabCompletionStatus({ ...ready, state: 'asleep' }),
 			noModel: parseTabCompletionStatus({ ...ready, model: undefined }),
 			notAnObject: parseTabCompletionStatus('ready'),
 		}, {
-			complete: { ...ready, percent: 100, installedModels: [{ name: 'a', size: 5 }, { name: 'b', size: undefined }] },
+			complete: { ...ready, percent: 100, installedModels: [{ name: 'a', size: 5, description: undefined }, { name: 'b', size: undefined, description: undefined }], offeredModels: [{ name: 'a', size: 4, description: 'Quick' }, { name: 'd', size: undefined, description: undefined }] },
+			fromAnOlderExtension: ready,
 			unknownState: undefined,
 			noModel: undefined,
 			notAnObject: undefined,
