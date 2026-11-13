@@ -270,7 +270,7 @@ export class TabCompletionView extends ViewPane {
 		const name = await this.quickInputService.input({
 			title: localize('model.other.title', "Model for Tab Completion"),
 			prompt: localize('model.other.prompt', "Name of a code model that can fill in the middle of a file, as the model server knows it."),
-			placeHolder: localize('model.other.placeholder', "For example {0}", 'qwen2.5-coder:1.5b'),
+			placeHolder: localize('model.other.placeholder', "For example {0}", 'qwen2.5-coder:1.5b-base'),
 			value: current
 		});
 		if (name?.trim()) {

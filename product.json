@@ -1,5 +1,5 @@
 {
-	"//": "vs-claude: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsClaudeManagedSettings (locked settings), vsClaudeDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets).",
+	"//": "vs-claude: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsClaudeManagedSettings (locked settings), vsClaudeDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets). The default for editor.quickSuggestions is the classic one: with upstream's newer default the editor drops a tab completion that takes longer than 750 ms. editor.suggest.selectionMode is whenQuickSuggestion: right after a trigger character such as a dot the suggestion list selects nothing, so tab completion may propose any member instead of having to continue the first list entry.",
 	"nameShort": "vs-claude",
 	"nameLong": "vs-claude",
 	"applicationName": "vs-claude",
@@ -326,6 +326,12 @@
 		"prettier.useTabs": false
 	},
 	"vsClaudeDefaultSettings": {
-		"editor.defaultFormatter": "esbenp.prettier-vscode"
+		"editor.defaultFormatter": "esbenp.prettier-vscode",
+		"editor.quickSuggestions": {
+			"other": "on",
+			"comments": "off",
+			"strings": "off"
+		},
+		"editor.suggest.selectionMode": "whenQuickSuggestion"
 	}
 }
