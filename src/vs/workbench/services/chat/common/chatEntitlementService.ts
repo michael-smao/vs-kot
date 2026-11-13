@@ -1514,14 +1514,11 @@ export class ChatEntitlementContext extends Disposable {
 	private _forceHidden = false;
 
 	private withConfiguration(state: IChatEntitlementContextState): IChatEntitlementContextState {
-		if (this._forceHidden || this.configurationService.getValue(ChatAIDisabledSettingId) === true) {
-			return {
-				...state,
-				hidden: true
-			};
-		}
-
-		return state;
+		// vs-claude: AI features are always hidden in this fork, whatever the setting or policy state says
+		return {
+			...state,
+			hidden: true
+		};
 	}
 
 	setForceHidden(hidden: boolean): void {

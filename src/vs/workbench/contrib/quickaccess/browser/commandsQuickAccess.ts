@@ -16,6 +16,7 @@ import { AbstractEditorCommandsQuickAccessProvider } from '../../../../editor/co
 import { localize, localize2 } from '../../../../nls.js';
 import { isLocalizedString } from '../../../../platform/action/common/action.js';
 import { Action2, IMenuService, MenuId, MenuItemAction, SubmenuItemAction } from '../../../../platform/actions/common/actions.js';
+import { isAICommandId } from '../../../../platform/chat/common/vsClaudeAIOff.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationChangeEvent, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -229,7 +230,8 @@ export class CommandsQuickAccessProvider extends AbstractEditorCommandsQuickAcce
 		const globalCommandsMenu = this.menuService.getMenuActions(MenuId.CommandPalette, scopedContextKeyService);
 		const globalCommandsMenuActions = globalCommandsMenu
 			.reduce((r, [, actions]) => [...r, ...actions], <Array<MenuItemAction | SubmenuItemAction | string>>[])
-			.filter(action => action instanceof MenuItemAction && action.enabled) as MenuItemAction[];
+			.filter(action => action instanceof MenuItemAction && action.enabled)
+			.filter(action => !isAICommandId((action as MenuItemAction).item.id)) as MenuItemAction[]; // vs-claude: no AI commands
 
 		for (const action of globalCommandsMenuActions) {
 
