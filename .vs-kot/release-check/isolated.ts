@@ -7,6 +7,7 @@
 // the folder or the server that the user works with. One that did moved a download folder and restarted a server
 // that was in use.
 
+import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -17,8 +18,12 @@ export const repo = path.resolve(import.meta.dirname, '..', '..');
 /** Where the checks keep what they create: in the build folder, which git ignores. */
 export const scratch = path.join(repo, '.build', 'release-check');
 
-/** The port of the model server that the checks start for themselves. The real one is 11535. */
-export const ISOLATED_PORT = 11640;
+/**
+ * The port of the model server that the checks start for themselves, between 11640 and 11659. The real one is
+ * 11535. Every checkout has its own port, from its path: checks that run in two checkouts at the same time would
+ * otherwise take over and end each other's server.
+ */
+export const ISOLATED_PORT = 11640 + [...repo].reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) % 9973, 7) % 20;
 
 /** Where tab completion keeps the model server and the models it downloaded. */
 export const realModelServerHome = path.join(os.homedir(), '.vs-kot', 'tab-completion');
@@ -50,4 +55,16 @@ export function getIsolatedModelServer(): Record<string, string> {
 	}
 	fs.rmSync(path.join(home, 'stopped'), { force: true });
 	return { VS_KOT_TAB_COMPLETION_HOME: home, VS_KOT_TAB_COMPLETION_PORT: String(ISOLATED_PORT) };
+}
+
+/** Ends the model server of the checks, so that none is left running. Only the one of this checkout. */
+export function stopIsolatedModelServer(): void {
+	try {
+		const pid = cp.execSync(`lsof -nP -iTCP:${ISOLATED_PORT} -sTCP:LISTEN -t`, { encoding: 'utf8' }).trim().split('\n')[0];
+		if (pid && cp.execSync(`ps -o command= -p ${pid}`, { encoding: 'utf8' }).includes(scratch)) {
+			process.kill(Number(pid));
+		}
+	} catch {
+		// nothing listens there
+	}
 }

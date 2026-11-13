@@ -146,6 +146,11 @@
 					"maximum": 2000,
 					"description": "%configuration.debounce%"
 				},
+				"tabCompletion.readAhead": {
+					"type": "boolean",
+					"default": true,
+					"description": "%configuration.readAhead%"
+				},
 				"tabCompletion.disabledLanguages": {
 					"type": "array",
 					"items": {

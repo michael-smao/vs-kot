@@ -27,7 +27,7 @@ function load(file, expose) {
 	vm.runInThisContext(Module.wrap(code), { filename: file })(module.exports, requireFn, module, file, out);
 	return module.exports;
 }
-const provider = load('provider.js', ['toItem', 'cleanUp', 'fitToContext', 'estimateTokens', 'countCoveredClosers', 'isWellFormed']).__test;
+const provider = load('provider.js', ['toItem', 'cleanUp', 'fitToContext', 'estimateTokens', 'countCoveredClosers', 'isWellFormed', 'getReadEnd']).__test;
 const context = load('context.js', ['NEVER_SHARE']).__test;
 let failed = 0; const check = (name, ok, detail) => { if (!ok) { failed++; } console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
 
@@ -78,6 +78,15 @@ const fitted = provider.fitToContext([{ path: 'a.ts', text: numbers.slice(0, 400
 check('a prompt full of numbers is cut to what fits', fitted.estimate <= 7808 && fitted.prefix.length >= 600 && fitted.snippets.length < 2, `${fitted.snippets.length} other file(s), ${fitted.prefix.length} characters before and ${fitted.suffix.length} after the cursor, estimated ${fitted.estimate} tokens`);
 const normal = provider.fitToContext([{ path: 'a.ts', text: ts.slice(0, 2000) }, { path: 'b.ts', text: ts.slice(2000, 4000) }], ts.slice(0, 4800), ts.slice(4800, 5600), 7808, 1);
 check('a prompt of ordinary code is left as it is', normal.snippets.length === 2 && normal.prefix.length === 4800 && normal.suffix.length === 800, `estimated ${normal.estimate} tokens`);
+
+// --- reading ahead: the pieces in which code is handed to the model server before a suggestion is asked for
+const piecesOf = (text, known) => { const ends = []; for (let at = known; at < text.length && ends.length < 100;) { at = provider.getReadEnd(text, at); ends.push(at); } return ends; };
+const pieces = piecesOf(ts.slice(0, 7000), 2000);
+const sizes = pieces.map((end, index) => end - (index === 0 ? 2000 : pieces[index - 1]));
+check('code is read ahead in pieces that end with a line and with the text', pieces.at(-1) === 7000 && pieces.slice(0, -1).every(end => ts[end - 1] === '\n') && sizes.every(size => size >= 500 && size <= 2500) && pieces.length >= 3, `pieces of ${sizes.join(', ')} characters`);
+check('a little unread code is one piece', piecesOf(ts.slice(0, 3200), 2000).join() === '3200', '');
+const oneLine = piecesOf('x'.repeat(9000), 0);
+check('a line without end is read ahead in pieces too', oneLine.at(-1) === 9000 && oneLine.length >= 6, `${oneLine.length} pieces`);
 
 // --- files that are never sent
 const secret = ['/p/.env', '/p/.env.local', '/p/.env-production', '/p/prod.env', '/p/.envrc', '/p/terraform.tfvars', '/p/.pgpass', '/p/.git-credentials', '/p/.pypirc', '/p/secrets/db.ts', '/p/.ssh/config', '/p/.aws/credentials', '/p/id_rsa', '/p/server.key', '/p/cert.pem', '/p/.npmrc', '/p/credentials.json', '/p/secret.yaml'];

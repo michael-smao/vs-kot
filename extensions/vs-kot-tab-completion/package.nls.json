@@ -15,6 +15,7 @@
 	"configuration.stop": "Texts at which the model stops. The default is the list of markers of the Qwen Coder models, which end an answer.",
 	"configuration.maxTokens": "Upper limit for the length of a suggestion, in model tokens. A suggestion ends by itself at the end of its line or block; this limit is for the cases where it does not. Longer suggestions take longer to arrive.",
 	"configuration.debounce": "How long to wait after the last keystroke before asking the model, in milliseconds.",
+	"configuration.readAhead": "Let the model read the code before the cursor ahead of time: as soon as you start to type at a place it has not read yet, and when the cursor rests at such a place shortly after you typed. The first suggestion there then comes after about a second instead of several. Only with the model that the editor runs on this computer.",
 	"configuration.disabledLanguages": "Languages in which nothing is suggested.",
 	"command.setUp": "Set Up",
 	"command.stopServer": "Stop Model Server",

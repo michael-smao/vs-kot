@@ -39,6 +39,35 @@ const REQUEST_TIMEOUT_MS = 30000;
  * and the sooner it starts the better. So the longer pause only applies where the server knows the code already.
  */
 const PAUSE_AFTER_OVERTAKEN_MS = 300;
+/**
+ * Reading ahead: at a place the model server has not read yet, a suggestion takes seconds, nearly all of them for
+ * reading the code before the cursor. So the server is given that code before a suggestion is asked for: when typing
+ * starts at such a place, and when the cursor rests at one for this long shortly after something was typed.
+ */
+const CURSOR_REST_MS = 400;
+/** How long after the last keystroke a resting cursor still counts as someone at work, and not as someone who reads. */
+const READ_AHEAD_AFTER_TYPING_MS = 2 * 60 * 1000;
+/** Less unread code than this is not worth a request of its own: the request for the suggestion reads it in passing. */
+const READ_AHEAD_MIN_CHARS = 600;
+/**
+ * The code is handed over in pieces of about this size, each request one piece longer than the one before. The
+ * model server cannot be interrupted while it reads, so a request for a suggestion waits for one piece at most.
+ * A piece more costs about 30 ms.
+ */
+const READ_AHEAD_STEP_CHARS = 1000;
+/**
+ * What the model server does with what it has read, which is followed here to know what it has (llama.cpp,
+ * `get_available_slot` and `server_prompt_cache`). It goes on from what it has at hand from the request before
+ * when the next request shares at least half of that. Otherwise it puts that aside as a copy, and takes out the
+ * copy of an earlier place that fits the request better, if it has one. It keeps as many copies as fit into the
+ * memory it is given for them, five or more, and drops all of them with the model after half an hour without use.
+ * A copy is only relied on where the request clearly shares less than half: what is compared here is text, and
+ * the server counts tokens.
+ */
+const KEEPS_COPY_BELOW = 0.5;
+const FETCHES_COPY_BELOW = 0.47;
+const REMEMBERED_COPIES = 4;
+const REMEMBER_MS = 20 * 60 * 1000;
 /** After a failed request the server is left alone for a while, so that typing does not hammer a server that is down. */
 const BACKOFF_MS = 15000;
 /** How much text around a suggestion has to be unchanged for it to still count as the same place. */
@@ -55,6 +84,12 @@ export interface ICompletionTarget {
 	prepare?(): Promise<void>;
 	/** Told after every answer. */
 	noteUse?(): void;
+	/**
+	 * Whether the server may be given code ahead of a suggestion. Only the model server the editor runs itself: a
+	 * server of one's own may be shared with others, and how a server takes a request that asks for nothing to be
+	 * written differs between versions.
+	 */
+	readonly canReadAhead?: boolean;
 }
 
 /** What the model answered. */
@@ -101,6 +136,17 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	private _wasOvertaken = false;
 	/** The file and the start of the code in it that the model server read last: what it knows without reading anew. */
 	private _knownWindow: string | undefined;
+	/** The prompt the model server was given last, which it has read and goes on from, and when that was. */
+	private _atHand: string | undefined;
+	private _sentAt = 0;
+	/** Earlier prompts that the model server put aside as copies when it went on to another place, see `KEEPS_COPY_BELOW`. */
+	private _copies: string[] = [];
+	/** When a suggestion was last asked for, which is when something was last typed in a file that gets suggestions. */
+	private _lastAsked = 0;
+	private _restTimer: ReturnType<typeof setTimeout> | undefined;
+	/** The reading ahead that is under way, and at which place. */
+	private _readingAhead: { readonly window: string; readonly cancellation: vscode.CancellationTokenSource } | undefined;
+	private _readAheadPausedUntil = 0;
 
 	constructor(
 		private readonly _log: vscode.LogOutputChannel,
@@ -109,6 +155,8 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	) { }
 
 	dispose(): void {
+		clearTimeout(this._restTimer);
+		this._stopReadingAhead();
 		this._onDidChangeReachable.dispose();
 	}
 
@@ -119,28 +167,25 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	/** Forgets what was learned about the server, for example after its settings changed. */
 	reset(): void {
 		this._backoffUntil = 0;
+		this._readAheadPausedUntil = 0;
 		this._last = undefined;
+		// A server that was started anew has read nothing
+		this._stopReadingAhead();
+		this._forgetSent();
+		this._knownWindow = undefined;
 		this._setReachable(true);
 	}
 
 	async provideInlineCompletionItems(document: vscode.TextDocument, position: vscode.Position, context: vscode.InlineCompletionContext, token: vscode.CancellationToken): Promise<vscode.InlineCompletionItem[] | undefined> {
 		const configuration = vscode.workspace.getConfiguration('tabCompletion');
-		if (!configuration.get('enabled', true)) {
+		if (!isOfferedIn(configuration, document)) {
 			return undefined;
-		}
-		if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled' && document.uri.scheme !== 'vscode-remote') {
-			return undefined; // not a file someone edits: output, git versions, settings
-		}
-		if (configuration.get<string[]>('disabledLanguages', ['plaintext']).includes(document.languageId)) {
-			return undefined;
-		}
-		if (isNeverShared(document.uri)) {
-			return undefined; // a file that usually holds secrets is not shown to a model
 		}
 		const target = this._getTarget();
 		if (!target) {
 			return undefined; // not set up, or still starting
 		}
+		this._lastAsked = Date.now();
 
 		// With code right of the cursor a suggestion would have to be woven into it. Only closing punctuation may follow.
 		const restOfLine = document.lineAt(position.line).text.slice(position.character);
@@ -174,10 +219,13 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			return undefined;
 		}
 
+		// At a place the model server has not read yet, it starts to read with the first key, not with the first pause
+		this._readAhead(configuration, target, document, position, false);
+
 		// Wait for a pause in typing. The editor cancels this request when the next key is pressed. It has waited
 		// 50 ms itself before it asked.
 		const pause = configuration.get('debounce', 150);
-		const window = `${document.uri.toString()}@${document.offsetAt(prefixStart)}`;
+		const window = getWindow(document, prefixStart);
 		if (!await delay(this._wasOvertaken && this._knownWindow === window ? Math.max(pause, PAUSE_AFTER_OVERTAKEN_MS) : pause, token)) {
 			this._log.trace('superseded while waiting for a pause in typing');
 			return undefined;
@@ -196,9 +244,12 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 		}
 
 		// One request at a time. A request that comes up while the server is busy waits here, and gives up when
-		// typing goes on: of all that came up meanwhile, only the latest is sent.
+		// typing goes on: of all that came up meanwhile, only the latest is sent. A suggestion goes before reading
+		// ahead, which ends with the piece it is at: what is left to read, the request for the suggestion reads.
+		this._stopReadingAhead();
 		const waitStarted = Date.now();
-		if (!await this._whenServerIsFree(token)) {
+		const release = await this._takeServer(token);
+		if (!release) {
 			this._wasOvertaken = true;
 			this._log.trace('superseded while the model server was busy with the request before');
 			return undefined;
@@ -217,7 +268,8 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 		const started = Date.now();
 		let answer: IAnswer | undefined;
 		try {
-			answer = await this._request(configuration, target, fitted.snippets, document.uri, fitted.prefix, fitted.suffix, singleLine, maxTokens, token, () => this._knownWindow = window);
+			const prompt = this._getPrompt(configuration, fitted.snippets, document.uri, fitted.prefix, fitted.suffix);
+			answer = await this._request(target, window, prompt.text, this._getStops(configuration, target, singleLine), maxTokens, token);
 		} catch (error) {
 			if (token.isCancellationRequested) {
 				this._wasOvertaken = true;
@@ -228,6 +280,8 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			this._log.warn(`No answer from ${target.url}: ${error instanceof Error ? error.message : String(error)}`);
 			this._setReachable(false);
 			return undefined;
+		} finally {
+			release();
 		}
 		if (token.isCancellationRequested || answer === undefined) {
 			this._wasOvertaken = token.isCancellationRequested;
@@ -256,10 +310,11 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	}
 
 	/**
-	 * Waits until the model server is done with the request that was sent last.
-	 * @returns `false` when the request that waits was cancelled meanwhile
+	 * Waits until the model server is done with the request that was sent last, and takes the turn at it.
+	 * @returns what gives the turn back, to be called when the request is over, or `undefined` when whoever waits
+	 * was cancelled meanwhile
 	 */
-	private async _whenServerIsFree(token: vscode.CancellationToken): Promise<boolean> {
+	private async _takeServer(token: vscode.CancellationToken): Promise<(() => void) | undefined> {
 		for (; ;) {
 			const busy = this._serverBusy;
 			const isFree = await new Promise<boolean>(resolve => {
@@ -273,12 +328,204 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 				});
 			});
 			if (!isFree || token.isCancellationRequested) {
-				return false;
+				return undefined;
 			}
 			if (busy === this._serverBusy) {
-				return true; // nobody else took the turn in the meantime
+				// Nobody else took the turn in the meantime. Taken here and now, so that of two who wait only one gets it.
+				let release = () => { };
+				this._serverBusy = new Promise<void>(resolve => release = resolve);
+				return release;
 			}
 		}
+	}
+
+	/**
+	 * Told where the cursor is whenever it moves. Once it rests, the model server is given the code there, so that it
+	 * has read it by the time something is typed. Only shortly after something was typed: someone who reads code
+	 * and moves through it gets no suggestions, and the model has nothing to do.
+	 */
+	noteCursor(editor: vscode.TextEditor | undefined): void {
+		if (editor !== vscode.window.activeTextEditor) {
+			return; // the cursor of an editor that nobody types in
+		}
+		clearTimeout(this._restTimer);
+		this._restTimer = undefined;
+		if (!editor) {
+			return;
+		}
+		// What is being read ahead for another place is of no use any more. It ends with the piece it is at.
+		if (this._readingAhead && this._readingAhead.window !== getWindow(editor.document, getPrefixStart(editor.document, editor.selection.active))) {
+			this._stopReadingAhead();
+		}
+		if (Date.now() - this._lastAsked < READ_AHEAD_AFTER_TYPING_MS) {
+			this._restTimer = setTimeout(() => this._readAheadAtRest(editor), CURSOR_REST_MS);
+		}
+	}
+
+	private _readAheadAtRest(editor: vscode.TextEditor): void {
+		this._restTimer = undefined;
+		if (editor !== vscode.window.activeTextEditor || editor.selections.length !== 1 || !editor.selection.isEmpty) {
+			return; // a selection or several cursors: not a place where typing goes on
+		}
+		const configuration = vscode.workspace.getConfiguration('tabCompletion');
+		const target = isOfferedIn(configuration, editor.document) ? this._getTarget() : undefined;
+		if (target) {
+			this._readAhead(configuration, target, editor.document, editor.selection.active, true);
+		}
+	}
+
+	private _stopReadingAhead(): void {
+		this._readingAhead?.cancellation.cancel();
+		this._readingAhead = undefined;
+	}
+
+	/**
+	 * Has the model server read the code up to the cursor, unless it has read it already. Nothing is suggested from
+	 * it: the request for a suggestion that follows starts with the same text, and the server has that read then.
+	 * Runs beside whatever called it and ends by itself. A failure only means that nothing is read ahead for a while.
+	 * @param isNewPosition whether the cursor came to rest here, and not that typing goes on at a place that may be read ahead already
+	 */
+	private async _readAhead(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, document: vscode.TextDocument, position: vscode.Position, isNewPosition: boolean): Promise<void> {
+		if (!target.canReadAhead || !configuration.get('readAhead', true) || Date.now() < Math.max(this._backoffUntil, this._readAheadPausedUntil)) {
+			return;
+		}
+		const prefixStart = getPrefixStart(document, position);
+		const window = getWindow(document, prefixStart);
+		if (this._readingAhead?.window === window && !isNewPosition) {
+			return; // at it already
+		}
+		const prefix = document.getText(new vscode.Range(prefixStart, position));
+		const suffix = document.getText(new vscode.Range(position, document.positionAt(document.offsetAt(position) + MAX_SUFFIX_CHARS)));
+		if (prefix.trim().length === 0) {
+			return;
+		}
+
+		this._stopReadingAhead();
+		const cancellation = new vscode.CancellationTokenSource();
+		const current = this._readingAhead = { window, cancellation };
+		const token = cancellation.token;
+		try {
+			// The same code from other files, and the same cut to what fits, as the request for a suggestion has here
+			const snippets = configuration.get('useOtherFiles', true) ? await this._context.collect(document, position) : [];
+			if (token.isCancellationRequested) {
+				return;
+			}
+			const maxTokens = Math.round(configuration.get('maxTokens', 128));
+			const fitted = fitToContext(snippets, prefix, suffix, CONTEXT_TOKENS - maxTokens - PROMPT_MARGIN_TOKENS, this._tokensPerEstimate.get(document.uri.toString()) ?? 1);
+			const text = this._getPrompt(configuration, fitted.snippets, document.uri, fitted.prefix, fitted.suffix).untilCursor;
+			if (text === undefined) {
+				return;
+			}
+			const unread = text.length - this._getKnown(text).atHand;
+			if (unread < READ_AHEAD_MIN_CHARS) {
+				return;
+			}
+			await target.prepare?.();
+
+			const started = Date.now();
+			let pieces = 0;
+			for (; ;) {
+				const release = await this._takeServer(token);
+				if (!release) {
+					this._log.trace(`reading ahead ended after ${pieces} piece(s): ${isNewPosition ? 'the cursor' : 'typing'} went on`);
+					return;
+				}
+				try {
+					// With the turn at the server, nobody else sends: what the server knows is what it knows when this is read
+					const { atHand, known } = this._getKnown(text);
+					if (text.length - atHand < (pieces === 0 ? READ_AHEAD_MIN_CHARS : 1) || pieces >= 40) {
+						break;
+					}
+					if (known > atHand) {
+						this._log.trace(`reading ahead: the server has ${atHand} of ${text.length} characters at hand and a copy of ${known}`);
+					}
+					// One token is the least that can be asked for: asked for none, the server writes on to the end of the line
+					if (await this._request(target, window, text.slice(0, getReadEnd(text, known)), [], 1, undefined) === undefined) {
+						this._readAheadPausedUntil = Date.now() + BACKOFF_MS;
+						return;
+					}
+					pieces++;
+				} finally {
+					release();
+				}
+			}
+			if (pieces > 0) {
+				target.noteUse?.();
+				this._log.debug(`read ahead: ${unread} characters in ${pieces} piece(s), ${Date.now() - started} ms, ${isNewPosition ? 'the cursor rested' : 'typing started'} at ${position.line + 1}:${position.character + 1}`);
+			}
+		} catch (error) {
+			// Whether the server is gone is for the next request for a suggestion to find out
+			this._readAheadPausedUntil = Date.now() + BACKOFF_MS;
+			this._log.debug(`reading ahead failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			cancellation.dispose();
+			if (this._readingAhead === current) {
+				this._readingAhead = undefined;
+			}
+		}
+	}
+
+	/**
+	 * How much of a text, from its start, the model server has read.
+	 * @returns `atHand`: what it has from the request before, and goes on from. `known`: that, or more where the
+	 * server will fetch the copy it kept of an earlier place. A request has to reach at least that far then: the
+	 * server cuts the copy to the request.
+	 */
+	private _getKnown(text: string): { readonly atHand: number; readonly known: number } {
+		if (Date.now() - this._sentAt > REMEMBER_MS) {
+			this._forgetSent();
+		}
+		const last = this._atHand;
+		if (last === undefined) {
+			return { atHand: 0, known: 0 };
+		}
+		const atHand = getCommonPrefixLength(last, text);
+		const copy = atHand / last.length < FETCHES_COPY_BELOW ? this._findCopy(text, atHand, last.length) : undefined;
+		return { atHand, known: copy?.shared ?? atHand };
+	}
+
+	/**
+	 * The copy that the model server takes out for a request, if any: the one that shares the most with the request,
+	 * more than what the server has at hand does, and more of itself.
+	 * @param atHand how much of the request is at hand, of the `lastLength` characters that are at hand in all
+	 */
+	private _findCopy(prompt: string, atHand: number, lastLength: number): { readonly index: number; readonly shared: number } | undefined {
+		let best: { index: number; shared: number } | undefined;
+		this._copies.forEach((copy, index) => {
+			const shared = getCommonPrefixLength(copy, prompt);
+			if (shared > (best?.shared ?? atHand) && shared / copy.length > atHand / lastLength) {
+				best = { index, shared };
+			}
+		});
+		return best;
+	}
+
+	/** Follows what the model server does with what it has read when it gets a prompt, see `KEEPS_COPY_BELOW`. */
+	private _noteSent(prompt: string): void {
+		if (Date.now() - this._sentAt > REMEMBER_MS) {
+			this._forgetSent();
+		}
+		const last = this._atHand;
+		if (last !== undefined) {
+			const shared = getCommonPrefixLength(last, prompt);
+			if (shared / last.length < KEEPS_COPY_BELOW) {
+				const taken = this._findCopy(prompt, shared, last.length);
+				if (taken) {
+					this._copies.splice(taken.index, 1);
+				}
+				this._copies.push(last);
+				if (this._copies.length > REMEMBERED_COPIES) {
+					this._copies.shift();
+				}
+			}
+		}
+		this._atHand = prompt;
+		this._sentAt = Date.now();
+	}
+
+	private _forgetSent(): void {
+		this._atHand = undefined;
+		this._copies = [];
 	}
 
 	/** Compares what a prompt was estimated at with what the model server made of it. */
@@ -323,10 +570,12 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	}
 
 	/**
-	 * Asks the model the way Qwen describes for its Coder models (README of Qwen2.5-Coder and its technical report):
-	 * the fill-in prompt, for code from several files the repository layout in front of it, and greedy decoding.
+	 * The prompt the way Qwen describes it for its Coder models (README of Qwen2.5-Coder and its technical report):
+	 * the fill-in prompt, and for code from several files the repository layout in front of it.
+	 * @returns the prompt, and the part of it up to the cursor where that is its start: every later prompt at the
+	 * same place starts with it too, whatever is typed
 	 */
-	private async _request(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, snippets: IContextSnippet[], uri: vscode.Uri, prefix: string, suffix: string, singleLine: boolean, maxTokens: number, token: vscode.CancellationToken, onDidRead: () => void): Promise<IAnswer | undefined> {
+	private _getPrompt(configuration: vscode.WorkspaceConfiguration, snippets: IContextSnippet[], uri: vscode.Uri, prefix: string, suffix: string): { readonly text: string; readonly untilCursor: string | undefined } {
 		const template = configuration.get('promptTemplate', '<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>');
 		// The layout the models were trained on for code that spans several files:
 		//   <|repo_name|>name \n <|file_sep|>path \n code \n ... <|file_sep|>path of this file \n fill-in prompt
@@ -336,9 +585,14 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			? (repositoryMarker ? `${repositoryMarker}${getRepositoryName(uri)}\n` : '') + snippets.map(snippet => `${separator}${snippet.path}\n${snippet.text}\n`).join('') + `${separator}${getShownPath(uri)}\n`
 			: '';
 		// In one pass: the code itself may contain "{suffix}", and that is not a placeholder
-		const prompt = otherFiles + template.replace(/\{(?<part>prefix|suffix)\}/g, (_match, part) => part === 'prefix' ? prefix : suffix);
-		this._log.trace(`prompt of ${prompt.length} characters, starting ${JSON.stringify(prompt.slice(0, 90))}`);
+		const text = otherFiles + template.replace(/\{(?<part>prefix|suffix)\}/g, (_match, part) => part === 'prefix' ? prefix : suffix);
+		const prefixAt = template.indexOf('{prefix}');
+		const suffixAt = template.indexOf('{suffix}');
+		return { text, untilCursor: prefixAt !== -1 && (suffixAt === -1 || suffixAt > prefixAt) ? otherFiles + template.slice(0, prefixAt) + prefix : undefined };
+	}
 
+	/** The texts at which an answer ends. */
+	private _getStops(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, singleLine: boolean): string[] {
 		// The model is trained to write what is missing and then to end. It does end by itself, but what it takes to
 		// be missing can be more than was asked for: having finished a function, the 7B model at times goes on with
 		// another one that nobody started. So a suggestion ends with its line when the line goes on behind the cursor,
@@ -347,7 +601,16 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 		const ends = singleLine ? ['\n'] : ['\n\n', '\r\n\r\n'];
 		const markers = configuration.get<string[]>('stop', []);
 		// Servers with the OpenAI kind of interface often take four at most. The model ends by itself with the first marker anyway.
-		const stop = target.api === 'openai' ? [...ends, ...markers].slice(0, 4) : [...markers, ...ends];
+		return target.api === 'openai' ? [...ends, ...markers].slice(0, 4) : [...markers, ...ends];
+	}
+
+	/**
+	 * Sends a prompt to the model server. Whoever calls this has the turn at the server, see `_takeServer`.
+	 * @param window the place the prompt is for, see `getWindow`
+	 * @param token cancels the request. Without one it runs to its end.
+	 */
+	private async _request(target: ICompletionTarget, window: string, prompt: string, stop: string[], maxTokens: number, token: vscode.CancellationToken | undefined): Promise<IAnswer | undefined> {
+		this._log.trace(`prompt of ${prompt.length} characters, starting ${JSON.stringify(prompt.slice(0, 90))}`);
 
 		// Greedy decoding, as in Qwen's examples: the same code gets the same suggestion every time. Ollama applies
 		// no penalty for repetition by itself; saying so keeps it that way on a server with other defaults.
@@ -366,18 +629,17 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			abort.abort();
 		}, REQUEST_TIMEOUT_MS);
 
-		// Whoever asks next waits for this, see _serverBusy
-		let release = () => { };
-		this._serverBusy = new Promise<void>(resolve => release = resolve);
-
 		// A cancelled request is taken from the server as soon as that frees the server: at once while the model
 		// writes, and when it starts to write while it still reads. What it has read is kept for the next request.
 		let isWriting = false;
-		const cancellation = token.onCancellationRequested(() => {
+		const cancellation = token?.onCancellationRequested(() => {
 			if (isWriting || !isStreamed) {
 				abort.abort();
 			}
 		});
+
+		// The server reads the prompt to its end, whatever becomes of the request
+		this._noteSent(prompt);
 
 		try {
 			const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal });
@@ -385,7 +647,7 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 				throw new Error(`${response.status} ${response.statusText}: ${(await response.text()).slice(0, 200)}`);
 			}
 
-			onDidRead(); // the answer has begun, or is there: the server has read the prompt
+			this._knownWindow = window; // the answer has begun, or is there: the server has read the prompt
 			if (!isStreamed || !response.body) {
 				const result = await response.json() as { response?: string; done_reason?: string; prompt_eval_count?: number; choices?: { text?: string; finish_reason?: string }[]; usage?: { prompt_tokens?: number } };
 				const text = target.api === 'ollama' ? result.response : result.choices?.[0]?.text;
@@ -396,7 +658,7 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 
 			// The answer has begun: the prompt is read. From here on a cancelled request can be taken away at once.
 			isWriting = true;
-			if (token.isCancellationRequested) {
+			if (token?.isCancellationRequested) {
 				abort.abort();
 				return undefined;
 			}
@@ -414,7 +676,7 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 					break;
 				}
 				isWriting = true;
-				if (token.isCancellationRequested) {
+				if (token?.isCancellationRequested) {
 					abort.abort(); // it was cancelled while the prompt was read: nobody wants what is written now
 					return undefined;
 				}
@@ -438,6 +700,9 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			}
 			return { text, isCutOff: reason === 'length', promptTokens };
 		} catch (error) {
+			if (!token?.isCancellationRequested) {
+				this._forgetSent(); // what the server made of the prompt, and whether it is the same server still, is not known
+			}
 			if (isTimedOut) {
 				// A slow answer is not a server that is down: no suggestion this time, and no waiting period
 				this._log.debug(`no answer within ${REQUEST_TIMEOUT_MS / 1000} s`);
@@ -446,10 +711,55 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			throw error;
 		} finally {
 			clearTimeout(timeout);
-			cancellation.dispose();
-			release();
+			cancellation?.dispose();
 		}
 	}
+}
+
+/** Whether suggestions are made in a document at all. */
+function isOfferedIn(configuration: vscode.WorkspaceConfiguration, document: vscode.TextDocument): boolean {
+	if (!configuration.get('enabled', true)) {
+		return false;
+	}
+	if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled' && document.uri.scheme !== 'vscode-remote') {
+		return false; // not a file someone edits: output, git versions, settings
+	}
+	if (configuration.get<string[]>('disabledLanguages', ['plaintext']).includes(document.languageId)) {
+		return false;
+	}
+	return !isNeverShared(document.uri); // a file that usually holds secrets is not shown to a model
+}
+
+/**
+ * Names the code that is sent for a place: the file, and where in it that code starts. As long as the start stays,
+ * the model server has most of the code read.
+ */
+function getWindow(document: vscode.TextDocument, prefixStart: vscode.Position): string {
+	return `${document.uri.toString()}@${document.offsetAt(prefixStart)}`;
+}
+
+function getCommonPrefixLength(one: string, other: string): number {
+	const length = Math.min(one.length, other.length);
+	let index = 0;
+	while (index < length && one.charCodeAt(index) === other.charCodeAt(index)) {
+		index++;
+	}
+	return index;
+}
+
+/**
+ * Where the next request of reading ahead ends: one piece behind what the model server knows, at the start of a
+ * line, or at the end of the text when little more than a piece is left.
+ * @param known how much of the text, from its start, the server has read
+ */
+function getReadEnd(text: string, known: number): number {
+	if (text.length - known <= READ_AHEAD_STEP_CHARS * 1.5) {
+		return text.length;
+	}
+	const lineBreak = text.indexOf('\n', known + READ_AHEAD_STEP_CHARS);
+	// A line that goes on and on, as in a minified file, is cut in the middle
+	const end = lineBreak === -1 || lineBreak - known > READ_AHEAD_STEP_CHARS * 2 ? known + READ_AHEAD_STEP_CHARS : lineBreak + 1;
+	return text.length - end < READ_AHEAD_STEP_CHARS / 2 ? text.length : end;
 }
 
 /**

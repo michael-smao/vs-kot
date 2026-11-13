@@ -37,7 +37,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			lastRetry = Date.now();
 			server.initialize();
 		}
-		return server.state.kind === 'ready' ? { url: server.endpoint, api: 'ollama', model: server.model, prepare: () => server.prepare(), noteUse: () => server.noteUse() } : undefined;
+		return server.state.kind === 'ready' ? { url: server.endpoint, api: 'ollama', model: server.model, prepare: () => server.prepare(), noteUse: () => server.noteUse(), canReadAhead: true } : undefined;
 	};
 
 	const contextCollector = new ContextCollector(log);
@@ -170,6 +170,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		// Feeds the Tab Completion view in the side bar and the colour of its icon
 		new StatusReporter(server, provider, getExternalEndpoint),
 		vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, provider),
+		// Where the cursor rests, the model reads the code before anything is typed there
+		vscode.window.onDidChangeTextEditorSelection(e => provider.noteCursor(e.textEditor)),
+		vscode.window.onDidChangeActiveTextEditor(editor => provider.noteCursor(editor)),
 		server.onDidChangeState(state => {
 			if (state.kind === 'ready') {
 				// Whatever went wrong with the server before is over: no waiting period, and failures count anew
