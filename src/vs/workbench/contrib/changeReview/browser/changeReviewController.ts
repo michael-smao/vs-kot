@@ -218,6 +218,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 		const model = this._editor.getModel();
 		if (!model) {
+			this._updateBar();
 			return;
 		}
 
@@ -225,6 +226,8 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		this._serviceSignature = this._getServiceSignature(model);
 		this._acquireQuickDiffModel(model);
 		this._update();
+		// A file that is still to be reviewed has its bar right away, see _getBarState
+		this._updateBar();
 	}
 
 	private _acquireQuickDiffModel(model: ITextModel): void {
@@ -539,10 +542,10 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 	// --- rendering
 
+	/** Takes the changes out of the editor. The bar is not part of them, see {@link _updateBar}. */
 	private _clearRendering(): void {
 		this._widgetStore.clear();
 		this._widgets = [];
-		this._bar.clear();
 		this._removedHeights.clear();
 		this._decorations.clear();
 		if (this._viewZoneIds.length > 0) {
@@ -558,6 +561,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	private _render(model: ITextModel): void {
 		if (this._hunks.length === 0) {
 			this._clearRendering();
+			this._updateBar();
 			return;
 		}
 
@@ -648,26 +652,6 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 				this._getHunkButtons(hunk)
 			)));
 
-		if (!this._bar.value) {
-			this._bar.value = new ChangeReviewBarWidget(this._editor, {
-				previousChange: () => this.goToPreviousChange(),
-				nextChange: () => this.goToNextChange(),
-				requestChange: () => this.requestChange(),
-				undoRequest: () => this.undoRequest(),
-				approveFile: () => this.approveFile(),
-				previousFile: () => this.goToFile(true),
-				nextFile: () => this.goToFile(false)
-			}, {
-				previousChange: this._withKeybinding(localize('previousChangeTitle', "Previous Change"), ChangeReviewCommandId.PreviousChange),
-				nextChange: this._withKeybinding(localize('nextChangeTitle', "Next Change"), ChangeReviewCommandId.NextChange),
-				requestChange: localize('requestChangeFileTitle', "Copy a note about this file to the clipboard, to paste it into Claude Code"),
-				undoRequest: localize('undoRequestTitle', "Take the change request back"),
-				approveFile: localize('approveFileTitle', "Approve all changes in this file that have no open request, and stage them in git"),
-				previousFile: this._withKeybinding(localize('previousFileTitle', "Previous File with Changes to Review"), ChangeReviewCommandId.PreviousFile),
-				nextFile: this._withKeybinding(localize('nextFileTitle', "Next File with Changes to Review"), ChangeReviewCommandId.NextFile)
-			});
-		}
-
 		this._updateCursorState();
 	}
 
@@ -717,40 +701,91 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		}
 	}
 
+	/** Shows the bar, brings it up to date, or takes it away. Nothing else decides whether there is a bar. */
 	private _updateBar(): void {
-		const bar = this._bar.value;
 		const model = this._editor.getModel();
-		if (!bar || !model || this._hunks.length === 0) {
+		const state = model ? this._getBarState(model) : undefined;
+		if (!state) {
+			this._bar.clear();
 			return;
 		}
 
+		if (!this._bar.value) {
+			this._bar.value = new ChangeReviewBarWidget(this._editor, {
+				previousChange: () => this.goToPreviousChange(),
+				nextChange: () => this.goToNextChange(),
+				requestChange: () => this.requestChange(),
+				undoRequest: () => this.undoRequest(),
+				approveFile: () => this.approveFile(),
+				previousFile: () => this.goToFile(true),
+				nextFile: () => this.goToFile(false)
+			}, {
+				previousChange: this._withKeybinding(localize('previousChangeTitle', "Previous Change"), ChangeReviewCommandId.PreviousChange),
+				nextChange: this._withKeybinding(localize('nextChangeTitle', "Next Change"), ChangeReviewCommandId.NextChange),
+				requestChange: localize('requestChangeFileTitle', "Copy a note about this file to the clipboard, to paste it into Claude Code"),
+				undoRequest: localize('undoRequestTitle', "Take the change request back"),
+				approveFile: localize('approveFileTitle', "Approve all changes in this file that have no open request, and stage them in git"),
+				previousFile: this._withKeybinding(localize('previousFileTitle', "Previous File with Changes to Review"), ChangeReviewCommandId.PreviousFile),
+				nextFile: this._withKeybinding(localize('nextFileTitle', "Next File with Changes to Review"), ChangeReviewCommandId.NextFile)
+			});
+		}
+		this._bar.value.update(state);
+	}
+
+	/** What the bar shows for the file in the editor, or `undefined` when the file gets no bar. */
+	private _getBarState(model: ITextModel): IBarState | undefined {
+		const fileUri = this._getFileUri(model);
+		const pendingFiles = this._service.pendingFiles;
+		const fileIndex = pendingFiles.findIndex(file => isEqual(file.uri, fileUri));
+
+		// A file that is still to be reviewed has its bar before its changes are computed, so that
+		// stepping through the files does not have to wait for them
+		const isLoading = this._hunks.length === 0 && !this._isKnown && fileIndex !== -1 && this._isReviewEditor();
+		if (this._hunks.length === 0 && !isLoading) {
+			return undefined;
+		}
+
 		const pending = this._getPendingHunks();
-		const wholeFile = this._hunks[0].wholeFile !== undefined ? this._hunks[0] : undefined;
+		const wholeFile = this._hunks.length > 0 && this._hunks[0].wholeFile !== undefined ? this._hunks[0] : undefined;
+
+		// A counter keeps its width while it counts, and with that the arrows around it keep their place,
+		// in this file and in the next one. It has room for the largest count there was so far.
+		widestCounts.changes = Math.max(widestCounts.changes, pending.length);
+		widestCounts.files = Math.max(widestCounts.files, pendingFiles.length);
+		const changeOf = (index: number, count: number) => localize('changeOf', "{0} of {1}", index, count);
+		const fileOf = (index: number, count: number) => localize('fileOf', "File {0} of {1}", index, count);
+		const filesLeft = (count: number) => localize('filesLeft', "{0} Files Left", count);
+		const noFilesLeft = localize('noFilesLeft', "No Files Left");
+
+		// The arrows that step through the changes are only there when there is something to step through,
+		// or will be in a moment. Without them the label can say what it likes: no arrow moves for it.
+		const hasChangeArrows = !wholeFile && (isLoading || pending.length > 0);
 
 		let changeLabel: string;
 		if (wholeFile) {
 			changeLabel = wholeFile.flagged ? localize('changeRequested', "Change Requested")
 				: wholeFile.wholeFile === ChangeReviewFileKind.Added ? localize('newFile', "New File")
 					: localize('deletedFile', "Deleted File");
+		} else if (isLoading) {
+			changeLabel = '';
 		} else {
 			const current = this._getCurrentHunk();
 			const index = current ? pending.indexOf(current) : -1;
-			changeLabel = index !== -1 ? localize('changeOf', "{0} of {1}", index + 1, pending.length)
+			changeLabel = index !== -1 ? changeOf(index + 1, pending.length)
 				: pending.length === 1 ? localize('oneChange', "1 Change")
 					: pending.length > 1 ? localize('changes', "{0} Changes", pending.length)
 						: localize('allRequested', "All Requested");
 		}
 
-		const fileUri = this._getFileUri(model);
-		const pendingFiles = this._service.pendingFiles;
-		const fileIndex = pendingFiles.findIndex(file => isEqual(file.uri, fileUri));
-		const fileLabel = fileIndex !== -1 ? localize('fileOf', "File {0} of {1}", fileIndex + 1, pendingFiles.length)
-			: pendingFiles.length === 0 ? localize('noFilesLeft', "No Files Left")
+		const fileLabel = fileIndex !== -1 ? fileOf(fileIndex + 1, pendingFiles.length)
+			: pendingFiles.length === 0 ? noFilesLeft
 				: pendingFiles.length === 1 ? localize('oneFileLeft', "1 File Left")
-					: localize('filesLeft', "{0} Files Left", pendingFiles.length);
+					: filesLeft(pendingFiles.length);
 
-		bar.update({
+		return {
 			changeLabel,
+			widestChangeLabels: hasChangeArrows ? [changeOf(widestCounts.changes, widestCounts.changes)] : [],
+			hasChangeArrows,
 			canNavigateChanges: !wholeFile && pending.length > 0,
 			isWholeFile: !!wholeFile,
 			isFlagged: !!wholeFile?.flagged,
@@ -758,8 +793,9 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			approveFileLabel: this._withKeybindingHint(localize('approveFile', "Approve File"), wholeFile ? ChangeReviewCommandId.ApproveChange : ChangeReviewCommandId.ApproveFile),
 			requestChangeLabel: this._withKeybindingHint(localize('requestChange', "Request Change"), ChangeReviewCommandId.RequestChange),
 			fileLabel,
+			widestFileLabels: [fileOf(widestCounts.files, widestCounts.files), filesLeft(widestCounts.files), noFilesLeft],
 			canNavigateFiles: pendingFiles.some(file => !isEqual(file.uri, fileUri))
-		});
+		};
 	}
 
 	// --- navigation
@@ -1102,6 +1138,10 @@ type IBarTitles = { readonly [action in keyof IBarActions]: string };
 
 interface IBarState {
 	readonly changeLabel: string;
+	/** The widest texts {@link changeLabel} takes on between its arrows. The label reserves their width. */
+	readonly widestChangeLabels: readonly string[];
+	/** Whether the arrows that step through the changes are there at all. */
+	readonly hasChangeArrows: boolean;
 	readonly canNavigateChanges: boolean;
 	/** A new or a deleted file: there are no single changes, the bar decides about the file. */
 	readonly isWholeFile: boolean;
@@ -1110,15 +1150,39 @@ interface IBarState {
 	readonly approveFileLabel: string;
 	readonly requestChangeLabel: string;
 	readonly fileLabel: string;
+	/** The widest texts {@link fileLabel} takes on between its arrows. The label reserves their width. */
+	readonly widestFileLabels: readonly string[];
 	readonly canNavigateFiles: boolean;
 }
 
-/** Floats at the bottom of an editor that shows changes under review: steps through changes and files. */
+/**
+ * The largest counts the bar had to show so far, and two digits at least. A counter keeps room for
+ * them, also once the count is smaller again, so that its arrows never move back and forth.
+ */
+const widestCounts = { changes: 10, files: 10 };
+
+/**
+ * How far to the right of the editor's middle the bar ends. About half the width of the bar, which
+ * makes it sit in the middle; what matters is that it is the same for every file.
+ */
+const BAR_END_FROM_MIDDLE = 215;
+/** The room the bar keeps to the bottom of the editor, and to its right side when the editor is narrow. */
+const BAR_MARGIN = 16;
+
+/**
+ * Floats at the bottom of an editor that shows changes under review: steps through changes and files.
+ *
+ * Its buttons stay where they are from one file to the next, so that a reviewer can click through the
+ * files without looking for them again. For that the bar hangs by its right end on a point that only
+ * depends on the size of the editor, and whatever differs between files makes it longer or shorter at
+ * its left end.
+ */
 class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 
 	private static _idPool = 0;
 	private readonly _id = `change-review-bar-widget-${ChangeReviewBarWidget._idPool++}`;
 
+	/** The point the bar hangs on. It has no size of its own. */
 	private readonly _domNode: HTMLElement;
 	private _position: IOverlayWidgetPosition | null = null;
 
@@ -1140,30 +1204,33 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 	) {
 		super();
 
-		this._domNode = $('.change-review-bar-widget');
+		this._domNode = $('.change-review-bar-anchor');
+		const bar = append(this._domNode, $('.change-review-bar-widget'));
 		const iconButton = (container: HTMLElement, icon: string, action: keyof IBarActions) => {
 			const button = createButton(container, this._store, { label: `$(${icon})`, title: titles[action], primary: false, run: () => actions[action]() }, true);
 			button.element.classList.add('change-review-icon-button');
 			return button;
 		};
 
-		this._changeSection = append(this._domNode, $('.change-review-bar-section'));
+		this._changeSection = append(bar, $('.change-review-bar-section'));
 		this._previousChange = iconButton(this._changeSection, 'arrow-up', 'previousChange');
 		this._changeLabel = append(this._changeSection, $('span.change-review-label'));
 		this._nextChange = iconButton(this._changeSection, 'arrow-down', 'nextChange');
 
-		const decisionSection = append(this._domNode, $('.change-review-bar-section'));
+		const decisionSection = append(bar, $('.change-review-bar-section'));
 		this._requestChange = createButton(decisionSection, this._store, { label: '', title: titles.requestChange, primary: false, run: () => actions.requestChange() });
 		this._undoRequest = createButton(decisionSection, this._store, { label: localize('undoRequest', "Undo Request"), title: titles.undoRequest, primary: false, run: () => actions.undoRequest() });
 		this._approveFile = createButton(decisionSection, this._store, { label: '', title: titles.approveFile, primary: true, run: () => actions.approveFile() });
 
-		const fileSection = append(this._domNode, $('.change-review-bar-section'));
+		// The buttons that step through the files come last: they are next to the end the bar hangs by
+		const fileSection = append(bar, $('.change-review-bar-section'));
 		this._previousFile = iconButton(fileSection, 'arrow-left', 'previousFile');
 		this._fileLabel = append(fileSection, $('span.change-review-label'));
 		this._nextFile = iconButton(fileSection, 'arrow-right', 'nextFile');
 
 		this._editor.addOverlayWidget(this);
 		this._register(toDisposable(() => this._editor.removeOverlayWidget(this)));
+		this.layout();
 	}
 
 	getId(): string {
@@ -1179,9 +1246,11 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 	}
 
 	update(state: IBarState): void {
+		// The label takes the width of its widest text: one line each, none of them shown (see the CSS)
 		this._changeLabel.textContent = state.changeLabel;
-		this._previousChange.element.style.display = state.isWholeFile ? 'none' : '';
-		this._nextChange.element.style.display = state.isWholeFile ? 'none' : '';
+		this._changeLabel.dataset.widest = state.widestChangeLabels.join('\n');
+		this._previousChange.element.style.display = state.hasChangeArrows ? '' : 'none';
+		this._nextChange.element.style.display = state.hasChangeArrows ? '' : 'none';
 		this._previousChange.enabled = state.canNavigateChanges;
 		this._nextChange.enabled = state.canNavigateChanges;
 		this._changeSection.classList.toggle('flagged', state.isFlagged);
@@ -1193,21 +1262,23 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 		this._approveFile.enabled = state.canApproveFile;
 
 		this._fileLabel.textContent = state.fileLabel;
+		this._fileLabel.dataset.widest = state.widestFileLabels.join('\n');
 		this._previousFile.enabled = state.canNavigateFiles;
 		this._nextFile.enabled = state.canNavigateFiles;
-
-		this.layout();
 	}
 
+	/**
+	 * Places the bottom right corner of the bar. Only the size of the editor goes into that, and nothing
+	 * that differs between files: not what the bar shows, and not how much room the line numbers take.
+	 */
 	layout(): void {
 		const layoutInfo = this._editor.getLayoutInfo();
-		const width = this._domNode.offsetWidth;
-		const height = this._domNode.offsetHeight;
+		const end = Math.min(layoutInfo.width / 2 + BAR_END_FROM_MIDDLE, layoutInfo.width - layoutInfo.verticalScrollbarWidth - BAR_MARGIN);
 
 		this._position = {
 			preference: {
-				top: layoutInfo.height - layoutInfo.horizontalScrollbarHeight - height - 16,
-				left: layoutInfo.contentLeft + Math.max(0, (layoutInfo.contentWidth - layoutInfo.verticalScrollbarWidth - width) / 2)
+				top: layoutInfo.height - layoutInfo.horizontalScrollbarHeight - BAR_MARGIN,
+				left: Math.round(end)
 			}
 		};
 		this._editor.layoutOverlayWidget(this);

@@ -57,6 +57,8 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	 */
 	private readonly _pendingCounts = new ResourceMap<number>();
 	private _requests: IChangeReviewRequest[] = [];
+	/** The file that {@link navigateFile} is opening at the moment. */
+	private _navigationTarget: IChangeReviewFile | undefined;
 
 	private readonly _repositoryListeners = this._register(new DisposableMap<ISCMRepository>());
 	private readonly _updateFilesScheduler = this._register(new RunOnceScheduler(() => this._updateFiles(), 100));
@@ -286,7 +288,10 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		}
 
 		// Where the reviewer is, in the order of all files. A file that is done has no place among the pending ones.
-		const index = from ? this._files.findIndex(file => isEqual(file.uri, from)) : -1;
+		// While a file is still opening, that is where the reviewer is: a second step that comes before
+		// the editor shows it goes on from there, and not once more from the file before.
+		const origin = this._navigationTarget?.uri ?? from;
+		const index = origin ? this._files.findIndex(file => isEqual(file.uri, origin)) : -1;
 		let target: IChangeReviewFile | undefined;
 		if (index === -1) {
 			target = previous ? pending.at(-1) : pending[0];
@@ -296,8 +301,17 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 			target = this._files.slice(index + 1).find(file => pending.includes(file)) ?? pending[0];
 		}
 
-		if (target) {
+		if (!target) {
+			return;
+		}
+
+		this._navigationTarget = target;
+		try {
 			await this._openFile(target);
+		} finally {
+			if (this._navigationTarget === target) {
+				this._navigationTarget = undefined;
+			}
 		}
 	}
 
@@ -311,7 +325,9 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		const control = pane?.getControl();
 		if (isCodeEditor(control) && isEqual(control.getModel()?.uri, file.editorUri)) {
 			control.getContribution<IChangeReviewEditor>(CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID)?.revealFirstPendingChange();
-		} else {
+		} else if (pane && isEqual(EditorResourceAccessor.getOriginalUri(pane.input, { supportSideBySide: SideBySideEditor.PRIMARY }), file.editorUri)) {
+			// Only when the file is what the editor shows now. When the reviewer went on to another file
+			// before this one was open, there is nothing to offer.
 			this._offerFileApproval(file);
 		}
 	}

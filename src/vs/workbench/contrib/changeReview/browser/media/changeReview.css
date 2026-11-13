@@ -58,6 +58,22 @@
 	border-radius: 8px;
 }
 
+/*
+ * The bar hangs by its bottom right corner on a point that the editor places, and grows from there to the
+ * left. Its right end, with the buttons that step through the files, is in the same spot for every file.
+ */
+.monaco-editor .change-review-bar-anchor {
+	width: 0;
+	height: 0;
+}
+
+.monaco-editor .change-review-bar-anchor > .change-review-bar-widget {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	width: max-content;
+}
+
 .monaco-editor .change-review-bar-section {
 	display: flex;
 	align-items: center;
@@ -108,6 +124,24 @@
 	line-height: 18px;
 	color: var(--vscode-descriptionForeground);
 	font-variant-numeric: tabular-nums;
+}
+
+/*
+ * A label between two arrows ("3 of 12") is as wide as the widest text it gets to. Those texts are in
+ * data-widest, one per line: not shown, but they take their room. So the arrows on both sides of the label
+ * stay where they are, whatever the label says.
+ */
+.monaco-editor .change-review-bar-widget .change-review-label {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+}
+
+.monaco-editor .change-review-bar-widget .change-review-label::after {
+	content: attr(data-widest);
+	white-space: pre;
+	height: 0;
+	visibility: hidden;
 }
 
 .monaco-editor .change-review-hunk-widget.flagged .change-review-label,
