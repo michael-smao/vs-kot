@@ -1,5 +1,5 @@
 {
-	"//": "vs-claude: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsClaudeManagedSettings (locked settings), vsClaudeDefaultSettings (changeable defaults) and esbenp.prettier-vscode in builtInExtensions.",
+	"//": "vs-claude: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol). Added: extensionsGallery (Open VSX). Added for the team: vsClaudeManagedSettings (locked settings), vsClaudeDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets).",
 	"nameShort": "vs-claude",
 	"nameLong": "vs-claude",
 	"applicationName": "vs-claude",
@@ -108,6 +108,54 @@
 					"flags": ""
 				},
 				"publisherDisplayName": "Prettier"
+			}
+		},
+		{
+			"name": "formulahendry.auto-close-tag",
+			"version": "0.5.15",
+			"sha256": "eee18c2bc3512e4755f596f98d104fcc5003f1d46e4c3cd3c70cbe7583e6bc2f",
+			"repo": "https://github.com/formulahendry/vscode-auto-close-tag",
+			"metadata": {
+				"id": "d3836729-9cc1-42c1-b2af-d50071f57d29",
+				"publisherId": {
+					"publisherId": "a5a8f2f3-af7f-47cf-ac18-83e7cacdbdb6",
+					"publisherName": "formulahendry",
+					"displayName": "formulahendry",
+					"flags": ""
+				},
+				"publisherDisplayName": "formulahendry"
+			}
+		},
+		{
+			"name": "formulahendry.auto-rename-tag",
+			"version": "0.1.10",
+			"sha256": "7c94f9a7971a1fbb4f74969597612e8a20e871283c930bfa54f333386c86d4d3",
+			"repo": "https://github.com/formulahendry/vscode-auto-rename-tag",
+			"metadata": {
+				"id": "6e440e71-8ed9-4f25-bb78-4b13096b8a03",
+				"publisherId": {
+					"publisherId": "a5a8f2f3-af7f-47cf-ac18-83e7cacdbdb6",
+					"publisherName": "formulahendry",
+					"displayName": "formulahendry",
+					"flags": ""
+				},
+				"publisherDisplayName": "formulahendry"
+			}
+		},
+		{
+			"name": "dsznajder.es7-react-js-snippets",
+			"version": "4.4.3",
+			"sha256": "4b727b2573f28dd4356dda726fac58e6028f6619cdb6015a294f4624fc4ffe3f",
+			"repo": "https://github.com/dsznajder/vscode-es7-javascript-react-snippets",
+			"metadata": {
+				"id": "19804510-b475-4dae-b0f7-6ca08fd1af0c",
+				"publisherId": {
+					"publisherId": "7ea644b4-2d93-4979-aac5-a12afebeb762",
+					"publisherName": "dsznajder",
+					"displayName": "dsznajder",
+					"flags": ""
+				},
+				"publisherDisplayName": "dsznajder"
 			}
 		}
 	],
