@@ -32,6 +32,13 @@ const PROMPT_MARGIN_TOKENS = 256;
  * Mac and more on a slower one; the model server keeps what it has read, so the next request is quick.
  */
 const REQUEST_TIMEOUT_MS = 30000;
+/**
+ * The pause in typing that is waited for after a request was overtaken by the next keystroke. Someone who types
+ * with short breaks would otherwise send a request in every break, each of them read by the model for nothing.
+ * Not for nothing is the first request at a place the model server has not read yet: reading takes seconds there,
+ * and the sooner it starts the better. So the longer pause only applies where the server knows the code already.
+ */
+const PAUSE_AFTER_OVERTAKEN_MS = 300;
 /** After a failed request the server is left alone for a while, so that typing does not hammer a server that is down. */
 const BACKOFF_MS = 15000;
 /** How much text around a suggestion has to be unchanged for it to still count as the same place. */
@@ -82,6 +89,18 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	private readonly _tokensPerEstimate = new Map<string, number>();
 	private _backoffUntil = 0;
 	private _isReachable = true;
+	/**
+	 * Resolves when the model server is done with the request that was sent to it last, whether anybody still waits
+	 * for its answer or not. The server works on one request at a time, and it reads a prompt to its end even after
+	 * the request was cancelled. Requests that are cancelled while they are read would pile up in front of the one
+	 * that counts: with a pause of a quarter of a second between keys, a suggestion took 5.7 seconds instead of one.
+	 * So there is never more than one request at the server, and the next one is the latest that came up meanwhile.
+	 */
+	private _serverBusy: Promise<void> = Promise.resolve();
+	/** Whether the request that was sent last was overtaken by typing before its answer was there. */
+	private _wasOvertaken = false;
+	/** The file and the start of the code in it that the model server read last: what it knows without reading anew. */
+	private _knownWindow: string | undefined;
 
 	constructor(
 		private readonly _log: vscode.LogOutputChannel,
@@ -155,8 +174,11 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			return undefined;
 		}
 
-		// Wait for a pause in typing. The editor cancels this request when the next key is pressed.
-		if (!await delay(configuration.get('debounce', 150), token)) {
+		// Wait for a pause in typing. The editor cancels this request when the next key is pressed. It has waited
+		// 50 ms itself before it asked.
+		const pause = configuration.get('debounce', 150);
+		const window = `${document.uri.toString()}@${document.offsetAt(prefixStart)}`;
+		if (!await delay(this._wasOvertaken && this._knownWindow === window ? Math.max(pause, PAUSE_AFTER_OVERTAKEN_MS) : pause, token)) {
 			this._log.trace('superseded while waiting for a pause in typing');
 			return undefined;
 		}
@@ -173,6 +195,18 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			return undefined;
 		}
 
+		// One request at a time. A request that comes up while the server is busy waits here, and gives up when
+		// typing goes on: of all that came up meanwhile, only the latest is sent.
+		const waitStarted = Date.now();
+		if (!await this._whenServerIsFree(token)) {
+			this._wasOvertaken = true;
+			this._log.trace('superseded while the model server was busy with the request before');
+			return undefined;
+		}
+		if (Date.now() - waitStarted > 20) {
+			this._log.trace(`waited ${Date.now() - waitStarted} ms for the model server to finish the request before`);
+		}
+
 		// The prompt has to fit into the context of the model together with the answer. What does not fit is left
 		// out here, the least important first: the model server would cut the prompt at its start instead.
 		const key = document.uri.toString();
@@ -183,9 +217,10 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 		const started = Date.now();
 		let answer: IAnswer | undefined;
 		try {
-			answer = await this._request(configuration, target, fitted.snippets, document.uri, fitted.prefix, fitted.suffix, singleLine, maxTokens, token);
+			answer = await this._request(configuration, target, fitted.snippets, document.uri, fitted.prefix, fitted.suffix, singleLine, maxTokens, token, () => this._knownWindow = window);
 		} catch (error) {
 			if (token.isCancellationRequested) {
+				this._wasOvertaken = true;
 				this._log.trace(`superseded after ${Date.now() - started} ms, while the model was answering`);
 				return undefined;
 			}
@@ -195,9 +230,11 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			return undefined;
 		}
 		if (token.isCancellationRequested || answer === undefined) {
+			this._wasOvertaken = token.isCancellationRequested;
 			this._log.trace(`superseded after ${Date.now() - started} ms, while the model was answering`);
 			return undefined;
 		}
+		this._wasOvertaken = false;
 		this._setReachable(true);
 		target.noteUse?.();
 		this._learnTokens(key, fitted.estimate, answer.promptTokens);
@@ -216,6 +253,32 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 
 		this._last = { uri: document.uri.toString(), offset: document.offsetAt(position), before: prefix.slice(-CONTEXT_CHECK_CHARS), after: suffix.slice(0, CONTEXT_CHECK_CHARS), completion };
 		return [toItem(document, position, position, completion, restOfLine)];
+	}
+
+	/**
+	 * Waits until the model server is done with the request that was sent last.
+	 * @returns `false` when the request that waits was cancelled meanwhile
+	 */
+	private async _whenServerIsFree(token: vscode.CancellationToken): Promise<boolean> {
+		for (; ;) {
+			const busy = this._serverBusy;
+			const isFree = await new Promise<boolean>(resolve => {
+				const listener = token.onCancellationRequested(() => {
+					listener.dispose();
+					resolve(false);
+				});
+				busy.then(() => {
+					listener.dispose();
+					resolve(true);
+				});
+			});
+			if (!isFree || token.isCancellationRequested) {
+				return false;
+			}
+			if (busy === this._serverBusy) {
+				return true; // nobody else took the turn in the meantime
+			}
+		}
 	}
 
 	/** Compares what a prompt was estimated at with what the model server made of it. */
@@ -263,7 +326,7 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 	 * Asks the model the way Qwen describes for its Coder models (README of Qwen2.5-Coder and its technical report):
 	 * the fill-in prompt, for code from several files the repository layout in front of it, and greedy decoding.
 	 */
-	private async _request(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, snippets: IContextSnippet[], uri: vscode.Uri, prefix: string, suffix: string, singleLine: boolean, maxTokens: number, token: vscode.CancellationToken): Promise<IAnswer | undefined> {
+	private async _request(configuration: vscode.WorkspaceConfiguration, target: ICompletionTarget, snippets: IContextSnippet[], uri: vscode.Uri, prefix: string, suffix: string, singleLine: boolean, maxTokens: number, token: vscode.CancellationToken, onDidRead: () => void): Promise<IAnswer | undefined> {
 		const template = configuration.get('promptTemplate', '<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>');
 		// The layout the models were trained on for code that spans several files:
 		//   <|repo_name|>name \n <|file_sep|>path \n code \n ... <|file_sep|>path of this file \n fill-in prompt
@@ -288,9 +351,12 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 
 		// Greedy decoding, as in Qwen's examples: the same code gets the same suggestion every time. Ollama applies
 		// no penalty for repetition by itself; saying so keeps it that way on a server with other defaults.
+		// From Ollama the answer comes in pieces as it is written. That is not to show it earlier, but to know when
+		// the model starts to write: until then it reads the prompt, and that cannot be interrupted.
+		const isStreamed = target.api === 'ollama';
 		const url = target.api === 'ollama' ? `${target.url}/api/generate` : `${target.url}/v1/completions`;
 		const body = target.api === 'ollama'
-			? { model: target.model, prompt, raw: true, stream: false, keep_alive: '30m', options: { num_ctx: CONTEXT_TOKENS, num_predict: maxTokens, temperature: 0, repeat_penalty: 1, stop } }
+			? { model: target.model, prompt, raw: true, stream: true, keep_alive: '30m', options: { num_ctx: CONTEXT_TOKENS, num_predict: maxTokens, temperature: 0, repeat_penalty: 1, stop } }
 			: { model: target.model, prompt, max_tokens: maxTokens, temperature: 0, stop, stream: false };
 
 		const abort = new AbortController();
@@ -299,17 +365,78 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 			isTimedOut = true;
 			abort.abort();
 		}, REQUEST_TIMEOUT_MS);
-		const cancellation = token.onCancellationRequested(() => abort.abort());
+
+		// Whoever asks next waits for this, see _serverBusy
+		let release = () => { };
+		this._serverBusy = new Promise<void>(resolve => release = resolve);
+
+		// A cancelled request is taken from the server as soon as that frees the server: at once while the model
+		// writes, and when it starts to write while it still reads. What it has read is kept for the next request.
+		let isWriting = false;
+		const cancellation = token.onCancellationRequested(() => {
+			if (isWriting || !isStreamed) {
+				abort.abort();
+			}
+		});
+
 		try {
 			const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal });
 			if (!response.ok) {
 				throw new Error(`${response.status} ${response.statusText}: ${(await response.text()).slice(0, 200)}`);
 			}
-			const result = await response.json() as { response?: string; done_reason?: string; prompt_eval_count?: number; choices?: { text?: string; finish_reason?: string }[]; usage?: { prompt_tokens?: number } };
-			const text = target.api === 'ollama' ? result.response : result.choices?.[0]?.text;
-			const reason = target.api === 'ollama' ? result.done_reason : result.choices?.[0]?.finish_reason;
-			const promptTokens = target.api === 'ollama' ? result.prompt_eval_count : result.usage?.prompt_tokens;
-			return text === undefined ? undefined : { text, isCutOff: reason === 'length', promptTokens };
+
+			onDidRead(); // the answer has begun, or is there: the server has read the prompt
+			if (!isStreamed || !response.body) {
+				const result = await response.json() as { response?: string; done_reason?: string; prompt_eval_count?: number; choices?: { text?: string; finish_reason?: string }[]; usage?: { prompt_tokens?: number } };
+				const text = target.api === 'ollama' ? result.response : result.choices?.[0]?.text;
+				const reason = target.api === 'ollama' ? result.done_reason : result.choices?.[0]?.finish_reason;
+				const promptTokens = target.api === 'ollama' ? result.prompt_eval_count : result.usage?.prompt_tokens;
+				return text === undefined ? undefined : { text, isCutOff: reason === 'length', promptTokens };
+			}
+
+			// The answer has begun: the prompt is read. From here on a cancelled request can be taken away at once.
+			isWriting = true;
+			if (token.isCancellationRequested) {
+				abort.abort();
+				return undefined;
+			}
+
+			// One JSON object per line: a piece of the answer each, and at the end how it went
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let pending = '';
+			let text = '';
+			let reason: string | undefined;
+			let promptTokens: number | undefined;
+			for (; ;) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+				isWriting = true;
+				if (token.isCancellationRequested) {
+					abort.abort(); // it was cancelled while the prompt was read: nobody wants what is written now
+					return undefined;
+				}
+				pending += decoder.decode(value, { stream: true });
+				const lines = pending.split('\n');
+				pending = lines.pop() ?? '';
+				for (const line of lines) {
+					if (!line.trim()) {
+						continue;
+					}
+					const piece = JSON.parse(line) as { response?: string; done?: boolean; done_reason?: string; prompt_eval_count?: number; error?: string };
+					if (piece.error) {
+						throw new Error(piece.error);
+					}
+					text += piece.response ?? '';
+					if (piece.done) {
+						reason = piece.done_reason;
+						promptTokens = piece.prompt_eval_count;
+					}
+				}
+			}
+			return { text, isCutOff: reason === 'length', promptTokens };
 		} catch (error) {
 			if (isTimedOut) {
 				// A slow answer is not a server that is down: no suggestion this time, and no waiting period
@@ -320,6 +447,7 @@ export class TabCompletionProvider implements vscode.InlineCompletionItemProvide
 		} finally {
 			clearTimeout(timeout);
 			cancellation.dispose();
+			release();
 		}
 	}
 }
