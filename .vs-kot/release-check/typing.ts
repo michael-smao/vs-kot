@@ -17,7 +17,7 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { _electron } from 'playwright';
-import { getIsolatedModelServer, ISOLATED_PORT, repo, scratch } from './isolated.ts';
+import { getIsolatedClaudeRecord, getIsolatedModelServer, ISOLATED_PORT, repo, scratch } from './isolated.ts';
 
 const model = process.argv[2];
 const root = path.join(repo, '.vs-kot', 'tp'); const ud = path.join(root, 'ud');
@@ -27,7 +27,7 @@ const isolated = getIsolatedModelServer();
 fs.rmSync(ws, { recursive: true, force: true }); fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
 fs.copyFileSync(path.join(repo, 'src/vs/editor/contrib/suggest/browser/suggestController.ts'), path.join(ws, 'src', 'big.ts'));
 fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
-fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ 'changeReview.enabled': false, 'editor.formatOnSave': false, ...(model ? { 'tabCompletion.model': model } : {}) }));
+fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ ...getIsolatedClaudeRecord(), 'changeReview.enabled': false, 'editor.formatOnSave': false, ...(model ? { 'tabCompletion.model': model } : {}) }));
 setTimeout(() => { console.log('HARD TIMEOUT'); process.exit(2); }, 400000).unref();
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const requestsAtServer = () => { try { return fs.readFileSync(path.join(isolated.VS_KOT_TAB_COMPLETION_HOME, 'server.log'), 'utf8').split('\n').filter(l => l.includes('[GIN]') && l.includes('/api/generate')).length; } catch { return 0; } };

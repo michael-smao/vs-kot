@@ -7,7 +7,9 @@ import './media/changeReview.css';
 
 import { $, append } from '../../../../base/browser/dom.js';
 import { Button } from '../../../../base/browser/ui/button/button.js';
+import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { raceTimeout, RunOnceScheduler } from '../../../../base/common/async.js';
+import { safeIntl } from '../../../../base/common/date.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { hash } from '../../../../base/common/hash.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
@@ -28,6 +30,7 @@ import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
@@ -36,6 +39,7 @@ import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultS
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, ChangeReviewCommandId, ChangeReviewFileKind, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewEditor, IChangeReviewService } from '../common/changeReview.js';
+import { findClaudeEntry, IClaudeRecordEntry, IClaudeRecordService } from '../common/claudeRecord.js';
 import { IChangeReviewFilesService, ReviewedFile } from './changeReviewedFile.js';
 
 // --- colors: brighter than the diff editor's, since here they sit inside the code that is being read
@@ -94,6 +98,14 @@ interface IReviewHunk {
 	readonly endLineNumber: number;
 	/** Whether the reviewer asked for this change to be redone. */
 	readonly flagged: boolean;
+	/** What says that Claude Code made this change. `undefined` when nothing on record says so. */
+	readonly claude: IClaudeRecordEntry | undefined;
+}
+
+/** What a change says about where it comes from, next to its buttons. */
+interface IReviewOrigin {
+	readonly label: string;
+	readonly title: string;
 }
 
 interface IReviewButton {
@@ -162,6 +174,8 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		@INotificationService private readonly _notificationService: INotificationService,
 		@ILabelService private readonly _labelService: ILabelService,
 		@IKeybindingService private readonly _keybindingService: IKeybindingService,
+		@IClaudeRecordService private readonly _claudeRecordService: IClaudeRecordService,
+		@IHoverService private readonly _hoverService: IHoverService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 	) {
 		super();
@@ -219,6 +233,11 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			}
 		}));
 		this._modelStore.add(model.onDidChangeOptions(() => this._redraw())); // the tab size
+		this._modelStore.add(this._claudeRecordService.onDidChangeRecord(uri => {
+			if (isEqual(uri, this._getFileUri(model))) {
+				this._update(); // what is on record for this file says who made its changes
+			}
+		}));
 		this._serviceSignature = this._getServiceSignature(model);
 		this._update();
 		// A file that is still to be reviewed has its bar right away, see _getBarState
@@ -328,7 +347,11 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			mapping: undefined,
 			startLineNumber: 1,
 			endLineNumber: model.getLineCount(),
-			flagged: this._service.hasRequest(file?.uri ?? model.uri, WHOLE_FILE_KEY)
+			flagged: this._service.hasRequest(file?.uri ?? model.uri, WHOLE_FILE_KEY),
+			// A new file is all added lines, and the editor of a deleted file shows the lines that are gone
+			claude: kind === ChangeReviewFileKind.Added ? findClaudeEntry(this._claudeRecordService.getEntries(file?.uri ?? model.uri), model.getLinesContent(), [])
+				: kind === ChangeReviewFileKind.Deleted ? findClaudeEntry(this._claudeRecordService.getEntries(file?.uri ?? model.uri), [], model.getLinesContent())
+					: undefined
 		}];
 
 		// A new or a deleted file is reviewed as a whole
@@ -378,12 +401,13 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		}
 
 		const fileUri = this._getFileUri(model);
+		const claudeEntries = this._claudeRecordService.getEntries(fileUri);
 		const lineCount = model.getLineCount();
 		const occurrences = new Map<string, number>();
 		const hunks = reviewed.mappings.map((mapping): IReviewHunk => {
-			const originalText = mapping.original.mapToLineArray(lineNumber => baseline.getLineContent(lineNumber)).join('\n');
-			const modifiedText = mapping.modified.mapToLineArray(lineNumber => model.getLineContent(lineNumber)).join('\n');
-			const contentHash = hash([originalText, modifiedText]).toString(36);
+			const originalLines = mapping.original.mapToLineArray(lineNumber => baseline.getLineContent(lineNumber));
+			const modifiedLines = mapping.modified.mapToLineArray(lineNumber => model.getLineContent(lineNumber));
+			const contentHash = hash([originalLines.join('\n'), modifiedLines.join('\n')]).toString(36);
 			const occurrence = occurrences.get(contentHash) ?? 0;
 			occurrences.set(contentHash, occurrence + 1);
 			const key = `${contentHash}.${occurrence}`;
@@ -395,7 +419,8 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 				mapping,
 				startLineNumber,
 				endLineNumber: mapping.modified.isEmpty ? Math.min(startLineNumber, lineCount) : mapping.modified.endLineNumberExclusive - 1,
-				flagged: this._service.hasRequest(fileUri, key)
+				flagged: this._service.hasRequest(fileUri, key),
+				claude: findClaudeEntry(claudeEntries, modifiedLines, originalLines)
 			};
 		});
 
@@ -405,7 +430,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	private _setHunks(model: ITextModel, hunks: IReviewHunk[], isKnown: boolean): void {
 		// Drawing takes down and puts up every removed block and every widget. Changes that are drawn already, at
 		// the same lines, are left alone: they are computed again after every edit, and nothing should flicker then.
-		const signature = hunks.map(hunk => `${hunk.key}@${hunk.startLineNumber}-${hunk.endLineNumber}${hunk.flagged ? '!' : ''}${hunk.wholeFile ?? ''}`).join(' ');
+		const signature = hunks.map(hunk => `${hunk.key}@${hunk.startLineNumber}-${hunk.endLineNumber}${hunk.flagged ? '!' : ''}${hunk.wholeFile ?? ''}${hunk.claude ? `*${hunk.claude.time}` : ''}`).join(' ');
 		const isDrawn = signature === this._renderedSignature;
 		if (!isDrawn) {
 			this._hunks = hunks; // the widgets belong to these objects: keep the drawn ones otherwise
@@ -648,7 +673,9 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 				hunk,
 				this._removedHeights.get(hunk) ?? 0,
 				hunk.flagged ? localize('changeRequested', "Change Requested") : undefined,
-				this._getHunkButtons(hunk)
+				hunk.claude ? getClaudeOrigin(hunk.claude) : undefined,
+				this._getHunkButtons(hunk),
+				this._hoverService
 			)));
 
 		this._updateCursorState();
@@ -766,6 +793,10 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 				: wholeFile.wholeFile === ChangeReviewFileKind.Added ? localize('newFile', "New File")
 					: wholeFile.wholeFile === ChangeReviewFileKind.Deleted ? localize('deletedFile', "Deleted File")
 						: localize('changedFile', "Changed, No Lines to Show");
+			if (wholeFile.claude && !wholeFile.flagged) {
+				// No arrows are around this label (see hasChangeArrows), so it may be longer for one file than for another
+				changeLabel = localize('labelWithOrigin', "{0} · {1}", changeLabel, getClaudeOrigin(wholeFile.claude).label);
+			}
 		} else if (isLoading) {
 			changeLabel = '';
 		} else {
@@ -1061,6 +1092,19 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	}
 }
 
+const recordTimeFormat = safeIntl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+/** How a change that Claude Code made says so. */
+function getClaudeOrigin(entry: IClaudeRecordEntry): IReviewOrigin {
+	const time = recordTimeFormat.value.format(new Date(entry.time));
+	return {
+		label: localize('originClaude', "Claude"),
+		title: entry.isWithoutLines ? localize('originClaudeFileTitle', "Claude Code changed this file on {0}. Which lines it changed is not on record.", time)
+			: entry.tool === 'Bash' ? localize('originClaudeShellTitle', "A shell command of Claude Code made this change on {0}.", time)
+				: localize('originClaudeTitle', "Claude Code made this change on {0}.", time)
+	};
+}
+
 function createButton(container: HTMLElement, store: DisposableStore, button: IReviewButton, supportIcons = false): Button {
 	const element = store.add(new Button(container, { ...defaultButtonStyles, secondary: !button.primary, title: button.title, supportIcons }));
 	element.label = button.label;
@@ -1084,13 +1128,19 @@ class ChangeReviewHunkWidget extends Disposable implements IOverlayWidget {
 		readonly hunk: IReviewHunk,
 		private readonly _removedHeightInLines: number,
 		label: string | undefined,
-		buttons: readonly IReviewButton[]
+		origin: IReviewOrigin | undefined,
+		buttons: readonly IReviewButton[],
+		hoverService: IHoverService
 	) {
 		super();
 
 		this._domNode = $('.change-review-hunk-widget');
 		this._domNode.classList.toggle('flagged', hunk.flagged);
 
+		if (origin) {
+			const element = append(this._domNode, $('span.change-review-origin', undefined, origin.label));
+			this._register(hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), element, origin.title));
+		}
 		if (label) {
 			append(this._domNode, $('span.change-review-label', undefined, label));
 		}

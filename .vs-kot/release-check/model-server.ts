@@ -12,7 +12,7 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { _electron } from 'playwright';
-import { ISOLATED_PORT, realModelServerHome, repo, scratch } from './isolated.ts';
+import { getIsolatedClaudeRecord, ISOLATED_PORT, realModelServerHome, repo, scratch } from './isolated.ts';
 
 const realHome = realModelServerHome;
 const PORT = ISOLATED_PORT; const MODEL = 'qwen2.5-coder:1.5b-base';
@@ -38,7 +38,7 @@ old.unref(); fs.writeFileSync(path.join(legacy, 'server.pid'), String(old.pid));
 const ws = path.join(scratch, 'srvws'); fs.rmSync(ws, { recursive: true, force: true }); fs.mkdirSync(ws, { recursive: true });
 fs.writeFileSync(path.join(ws, 'a.ts'), 'export interface Item { name: string; price: number; qty: number; }\n\nexport function total(items: Item[]): number {\n    return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\n\n');
 fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
-fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ 'tabCompletion.model': MODEL, 'changeReview.enabled': false }));
+fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ ...getIsolatedClaudeRecord(), 'tabCompletion.model': MODEL, 'changeReview.enabled': false }));
 
 (async () => {
 	for (let i = 0; i < 50 && !listening(); i++) { await sleep(200); }

@@ -29,6 +29,7 @@ export const enum ChangeReviewCommandId {
 	PreviousFile = 'changeReview.goToPreviousFile',
 	CopyRequests = 'changeReview.copyRequests',
 	Toggle = 'changeReview.toggle',
+	ClaudeConnection = 'changeReview.claudeConnection',
 }
 
 /** Set on an editor that shows changes under review, flagged ones included. */

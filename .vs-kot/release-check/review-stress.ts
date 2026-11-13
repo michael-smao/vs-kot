@@ -13,7 +13,7 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { _electron } from 'playwright';
-import { getIsolatedModelServer, repo, scratch } from './isolated.ts';
+import { getIsolatedClaudeRecord, getIsolatedModelServer, repo, scratch } from './isolated.ts';
 
 const ws = path.join(scratch, 'review-stress');
 const root = path.join(repo, '.vs-kot', 'tp'); const ud = path.join(root, 'ud');
@@ -43,7 +43,7 @@ fs.writeFileSync(file('two.ts'), small('two').replace('return value;', 'return v
 fs.chmodSync(file('three.ts'), 0o755);          // changed, but in no line
 
 fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
-fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ 'changeReview.autoReveal': false, 'tabCompletion.enabled': false, 'editor.minimap.enabled': false }));
+fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify({ ...getIsolatedClaudeRecord(), 'changeReview.autoReveal': false, 'tabCompletion.enabled': false, 'editor.minimap.enabled': false }));
 setTimeout(() => { console.log('HARD TIMEOUT'); process.exit(2); }, 420000).unref();
 const results = []; const check = (name, ok, detail) => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
 

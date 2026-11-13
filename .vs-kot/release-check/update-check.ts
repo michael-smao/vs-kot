@@ -31,6 +31,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { chromium } from 'playwright';
+import { getIsolatedClaudeRecord } from './isolated.ts';
 
 const source = path.resolve(process.argv[2] ?? '');
 if (!process.argv[2] || !fs.existsSync(path.join(source, 'Contents', 'Resources', 'app', 'product.json'))) {
@@ -96,6 +97,8 @@ const server = http.createServer((request, response) => {
 /** Installs a copy of the build that believes it is an old release and looks for updates on our server. */
 function installOldCopy(): void {
 	fs.rmSync(ud, { recursive: true, force: true });
+	fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
+	fs.writeFileSync(path.join(ud, 'User', 'settings.json'), JSON.stringify(getIsolatedClaudeRecord()));
 	fs.rmSync(app, { recursive: true, force: true });
 	fs.mkdirSync(installDir, { recursive: true });
 	run('/bin/cp', ['-Rc', source, app]);

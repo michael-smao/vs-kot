@@ -24,6 +24,18 @@ export const ISOLATED_PORT = 11640;
 export const realModelServerHome = path.join(os.homedir(), '.vs-kot', 'tab-completion');
 
 /**
+ * Keeps an editor that a check starts away from the settings of Claude Code and from the record of what it
+ * changed. An editor that finds itself connected there brings the script that Claude Code runs up to its own
+ * version, and that script is run by the sessions the user is working in. The folder named here does not exist,
+ * so such an editor finds no Claude Code at all.
+ * @returns what to add to the settings of an editor that a check starts
+ */
+export function getIsolatedClaudeRecord(): Record<string, string> {
+	const home = path.join(scratch, 'no-claude');
+	return { 'changeReview.claudeCode.settingsFile': path.join(home, 'settings.json'), 'changeReview.claudeCode.recordFolder': path.join(home, 'record') };
+}
+
+/**
  * A model server of their own for the checks, in a folder that only links to the installed model server and to
  * the models, so that nothing is downloaded.
  * @returns what to add to the environment of an editor that a check starts
