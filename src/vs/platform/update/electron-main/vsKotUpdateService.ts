@@ -9,7 +9,8 @@
 //
 //   1. It reads `latest.json` from the newest release (`updateUrl` in product.json) and compares its release number
 //      with ours (`vsKotVersion` in product.json).
-//   2. It downloads the zip, checks its SHA-256 against the manifest, unpacks it and checks that the result is a
+//   2. It checks that the release is signed with the release key (`vsKotUpdatePublicKeys` in product.json), then
+//      downloads the zip, checks its SHA-256 against the manifest, unpacks it and checks that the result is a
 //      consistent vs-kot app of exactly that release.
 //   3. When the app quits, a small shell script that outlives it exchanges the two app folders and, after
 //      "Restart to Update", opens the new one.
@@ -44,7 +45,8 @@ import { asJson, IRequestService, isSuccess } from '../../request/common/request
 import { IApplicationStorageMainService } from '../../storage/electron-main/storageMainService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { AvailableForDownload, IUpdate, State, StateType, UpdateType } from '../common/update.js';
-import { isNewerVsKotVersion, isTrustedUpdateUrl, IVsKotReleaseManifest, parseVsKotVersion, toVsKotUpdate } from '../common/vsKotUpdate.js';
+import { isNewerVsKotVersion, isTrustedUpdateUrl, IVsKotReleaseManifest, parseVsKotVersion, toVsKotUpdate, vsKotReleaseStatement } from '../common/vsKotUpdate.js';
+import { isSignedByVsKotKey } from '../node/vsKotReleaseSignature.js';
 import { AbstractUpdateService } from './abstractUpdateService.js';
 
 const execFileAsync = promisify(execFile);
@@ -248,7 +250,7 @@ export class VsKotUpdateService extends AbstractUpdateService implements IRelaun
 		try {
 			return (await this.fetchLatest(token)) === undefined;
 		} catch (err) {
-			this.logService.error('update#vsKot - could not read the release manifest', err);
+			this.logService.error('update#vsKot - the check for updates failed', err);
 			return undefined;
 		}
 	}
@@ -290,7 +292,7 @@ export class VsKotUpdateService extends AbstractUpdateService implements IRelaun
 			}
 		} catch (err) {
 			if (this.state.type === StateType.CheckingForUpdates) {
-				this.logService.error('update#vsKot - could not read the release manifest', err);
+				this.logService.error('update#vsKot - the check for updates failed', err);
 				this.setState(State.Idle(UpdateType.Archive, explicit ? toErrorMessage(err) : undefined));
 			}
 			return;
@@ -312,7 +314,10 @@ export class VsKotUpdateService extends AbstractUpdateService implements IRelaun
 		}
 	}
 
-	/** The newest release when it is newer than the running app, read from its manifest. */
+	/**
+	 * The newest release when it is newer than the running app, read from its manifest. A newer release that is not
+	 * signed with the release key is an error: nothing of it is downloaded.
+	 */
 	private async fetchLatest(token: CancellationToken): Promise<IUpdate | undefined> {
 		const url = this.buildUpdateFeedUrl();
 		if (!url) {
@@ -327,7 +332,20 @@ export class VsKotUpdateService extends AbstractUpdateService implements IRelaun
 			throw new Error(localize('vsKotUpdate.checkFailed', "The check for updates failed (HTTP status {0}).", context.res.statusCode ?? 0));
 		}
 
-		return toVsKotUpdate(await asJson<IVsKotReleaseManifest>(context), this.productService.vsKotVersion, `darwin-${process.arch}`);
+		const manifest = await asJson<IVsKotReleaseManifest>(context);
+		const platform = `darwin-${process.arch}`;
+		const update = toVsKotUpdate(manifest, this.productService.vsKotVersion, platform);
+		if (!update?.productVersion || !update.sha256hash) {
+			return undefined;
+		}
+
+		// A build without keys, such as one made for a test, takes the manifest's word for the SHA-256.
+		const keys = this.productService.vsKotUpdatePublicKeys ?? [];
+		if (keys.length > 0 && !isSignedByVsKotKey(vsKotReleaseStatement(update.productVersion, platform, update.sha256hash), manifest?.assets?.[platform]?.signature, keys)) {
+			throw new Error(localize('vsKotUpdate.notSigned', "Version {0} is on offer, but it is not signed with the release key of {1}. It was not installed.", update.productVersion, this.productService.nameShort));
+		}
+
+		return update;
 	}
 
 	/**

@@ -129,6 +129,8 @@ export interface IProductConfiguration {
 	readonly vsKotDefaultSettings?: IStringDictionary<unknown>;
 	/** vs-kot: our own release number, for example `0.5.0`. `version` stays the VS Code version the fork is based on. */
 	readonly vsKotVersion?: string;
+	/** vs-kot: the public halves of the keys a release may be signed with. The app installs no update that is not signed with one of them. */
+	readonly vsKotUpdatePublicKeys?: readonly string[];
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];
 

@@ -92,7 +92,7 @@ To install by hand instead:
 
 vs-kot keeps itself up to date. Shortly after it starts and then every hour it looks for a newer release, downloads it in the background and installs it when you quit. Once a release is downloaded, an Update button appears in the title bar; it restarts the app into the new version right away. The setting `update.mode` turns this off.
 
-Before anything is installed, the app checks the download against the SHA-256 that the release announces and makes sure it is a complete vs-kot app of exactly that release. Where the app cannot replace itself, for example in a folder you may not write to, it offers the release page instead.
+Releases are signed with a key that is not kept on GitHub, and the app installs nothing that does not carry this signature. Write access to this repository alone is therefore not enough to reach installed copies. Before anything is installed, the app also checks the download against the SHA-256 that the release announces and makes sure it is a complete vs-kot app of exactly that release. Where the app cannot replace itself, for example in a folder you may not write to, it offers the release page instead.
 
 After an update macOS treats the app as new and asks again for access to folders such as Documents.
 
@@ -110,7 +110,8 @@ pnpm run compile-client
 - `.vs-kot/package.sh` builds the macOS app and the zip for a release. The result lands next to the repo folder, in `VSCode-darwin-arm64/`.
 - `.vs-kot/release-check/` holds a check that drives a real window through every feature listed above. Run it before a release, on the source build and on the packaged app.
 - `.vs-kot/release-check/update-check.ts` checks the updater with the packaged app: an older copy of it has to find, download and install the new build.
-- `.vs-kot/release.sh` publishes the build as a GitHub release. Every release carries `latest.json` next to the zip; installed apps find a release through that file. Raise `vsKotVersion` in `product.json` for every release.
+- `.vs-kot/sign-release.sh` signs the build with the release key. The key is a file on the Mac of whoever publishes releases; the script's header says where it is, how to keep it safe and how to change it. `package.sh` calls the script when the key is there.
+- `.vs-kot/release.sh` publishes the build as a GitHub release, and only a signed one. Every release carries `latest.json` next to the zip; installed apps find a release through that file. Raise `vsKotVersion` in `product.json` for every release.
 
 ## How the fork is organised
 

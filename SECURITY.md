@@ -10,4 +10,4 @@ A problem that also exists in Visual Studio Code itself is upstream's to fix. Re
 
 ## What to know about releases
 
-Releases are not signed with an Apple developer certificate. The app updates itself from the releases of this repository and checks every download against the SHA-256 that the release announces before it installs anything.
+Releases are not signed with an Apple developer certificate. They are signed with a key of our own that is not kept on GitHub. The app updates itself from the releases of this repository and installs only what carries this signature and has the SHA-256 that the release announces. Version 0.5.0 does not check the signature yet.

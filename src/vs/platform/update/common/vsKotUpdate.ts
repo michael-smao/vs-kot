@@ -14,6 +14,8 @@ import { IUpdate } from './update.js';
 export interface IVsKotReleaseAsset {
 	readonly url?: string;
 	readonly sha256?: string;
+	/** The signature of this download made with the release key, see `vsKotReleaseStatement`. */
+	readonly signature?: string;
 }
 
 /** The content of `latest.json`. Everything is optional here because the file comes from the network. */
@@ -71,6 +73,15 @@ export function isTrustedUpdateUrl(value: string | undefined): boolean {
 		return false;
 	}
 	return uri.scheme === 'https' || (uri.scheme === 'http' && /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(uri.authority));
+}
+
+/**
+ * The text that is signed for one download of a release. It names the release number, the platform and the SHA-256
+ * of the zip, so that a signature cannot be moved to another release or to another file.
+ * `.vs-kot/sign-release.sh` signs the same text.
+ */
+export function vsKotReleaseStatement(version: string, platform: string, sha256: string): string {
+	return `vs-kot release\n${version}\n${platform}\n${sha256.toLowerCase()}\n`;
 }
 
 /**

@@ -4,16 +4,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 // vs-kot: checks the updater from end to end with the packaged app. An older copy of the app is installed in a test
-// folder and finds the real build as a newer release on a server that runs on this Mac. Four cases:
+// folder and finds the real build as a newer release on a server that runs on this Mac. Six cases:
 //
 //   1. it downloads the release, and "Update" in the title bar replaces the app and opens the new one
 //   2. it downloads the release, and simply quitting replaces the app
-//   3. the release's zip does not have the announced SHA-256: nothing is installed
-//   4. the app's folder cannot be written: the release is only offered, nothing is downloaded
+//   3. the zip was changed on the way and no longer has the announced SHA-256: nothing is installed
+//   4. the release is not signed: nothing is downloaded
+//   5. the release announces another zip than the one that was signed: nothing is downloaded
+//   6. the app's folder cannot be written: the release is only offered, nothing is downloaded
 //
 //   node .vs-kot/release-check/update-check.ts ../VSCode-darwin-arm64/vs-kot.app [folder for the test installation]
 //
-// Run it after .vs-kot/package.sh, before a release. It takes about seven minutes and opens the app several times.
+// Run it after .vs-kot/package.sh has built and signed the release, before publishing. The signature is taken from the
+// latest.json next to the app; the release key itself is not needed here. It takes about nine minutes and opens the
+// app several times.
 // The app is started the way a double click does it (through `open`), so macOS treats it as it would treat the real
 // one. Everything lives in ~/Library/Caches/vs-kot-update-check, away from Documents, where macOS would first ask
 // for folder access. Give a second argument, for example /Applications/vs-kot-update-check, to try the exchange in
@@ -41,7 +45,9 @@ const ws = path.join(root, 'ws');
 const updateHome = path.join(ud, 'app-update');
 const cdpPort = 9741;
 const oldVersion = '0.0.1';
-const newVersion: string = JSON.parse(fs.readFileSync(path.join(source, 'Contents', 'Resources', 'app', 'product.json'), 'utf8')).vsKotVersion;
+const sourceProduct = JSON.parse(fs.readFileSync(path.join(source, 'Contents', 'Resources', 'app', 'product.json'), 'utf8'));
+const newVersion: string = sourceProduct.vsKotVersion;
+const hasReleaseKey = (sourceProduct.vsKotUpdatePublicKeys ?? []).length > 0;
 
 setTimeout(() => { console.log('HARD TIMEOUT'); process.exit(2); }, 20 * 60 * 1000).unref();
 const results: boolean[] = [];
@@ -63,6 +69,8 @@ async function until(what: string, test: () => boolean | Promise<boolean>, secon
 // The release on offer: the real build, as a zip, described by a manifest that each case may bend.
 const zip = fs.existsSync(path.join(path.dirname(source), 'vs-kot-darwin-arm64.zip')) ? path.join(path.dirname(source), 'vs-kot-darwin-arm64.zip') : path.join(root, 'new.zip');
 let announcedSha = '';
+let announcedSignature: string | undefined;
+let changeZipOnTheWay = false;
 let zipDownloads = 0;
 // Like GitHub, the server sends two redirects before each file, the first one to another host name.
 const server = http.createServer((request, response) => {
@@ -74,11 +82,11 @@ const server = http.createServer((request, response) => {
 		redirect(`http://127.0.0.1:${port}/files${request.url.substring('/hop'.length)}`);
 	} else if (request.url === '/files/latest.json') {
 		response.setHeader('content-type', 'application/json');
-		response.end(JSON.stringify({ version: newVersion, commit: 'update-check', date: new Date().toISOString(), assets: { 'darwin-arm64': { url: `http://127.0.0.1:${port}/vs-kot.zip`, sha256: announcedSha } } }));
+		response.end(JSON.stringify({ version: newVersion, commit: 'update-check', date: new Date().toISOString(), assets: { 'darwin-arm64': { url: `http://127.0.0.1:${port}/vs-kot.zip`, sha256: announcedSha, signature: announcedSignature } } }));
 	} else if (request.url === '/files/vs-kot.zip') {
 		zipDownloads++;
-		response.setHeader('content-length', fs.statSync(zip).size);
-		fs.createReadStream(zip).pipe(response);
+		response.setHeader('content-length', fs.statSync(zip).size + (changeZipOnTheWay ? 1 : 0));
+		fs.createReadStream(zip).on('end', () => response.end(changeZipOnTheWay ? 'x' : undefined)).pipe(response, { end: false });
 	} else {
 		response.statusCode = 404; response.end();
 	}
@@ -129,11 +137,15 @@ async function quit(): Promise<boolean> {
 	if (!fs.existsSync(zip)) { run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', source, zip]); }
 	const realSha = await new Promise<string>((resolve, reject) => { const hash = crypto.createHash('sha256'); fs.createReadStream(zip).on('data', chunk => hash.update(chunk)).on('end', () => resolve(hash.digest('hex'))).on('error', reject); });
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+	const built = (() => { try { return JSON.parse(read(path.join(path.dirname(source), 'latest.json'))).assets['darwin-arm64'] as { sha256?: string; signature?: string }; } catch { return undefined; } })();
+	const realSignature = built?.sha256 === realSha ? built.signature : undefined;
+	check('0. the build carries a release key, and the latest.json next to it is signed', hasReleaseKey && !!realSignature, hasReleaseKey ? (realSignature ? '' : 'run .vs-kot/sign-release.sh first') : 'product.json has no vsKotUpdatePublicKeys');
+	if (!hasReleaseKey || !realSignature) { server.close(); console.log(`${results.filter(Boolean).length} of ${results.length} checks passed`); process.exit(1); }
 	console.log(`offering vs-kot ${newVersion} to a copy that calls itself ${oldVersion}, installed in ${installDir}`);
 
 	try {
 		// 1. Download, then "Update" in the title bar
-		announcedSha = realSha; installOldCopy(); start();
+		announcedSha = realSha; announcedSignature = realSignature; installOldCopy(); start();
 		let ready = await until('the update to be downloaded and checked', () => /update#setState ready/.test(mainLog()), 240);
 		check('1. the newer release is found, downloaded and checked', ready && fs.existsSync(path.join(updateHome, 'work', 'unpacked', path.basename(app))), `${zipDownloads} download(s)`);
 		if (ready) {
@@ -161,7 +173,7 @@ async function quit(): Promise<boolean> {
 		await quit();
 
 		// 2. Download, then simply quit
-		announcedSha = realSha; installOldCopy(); start();
+		announcedSha = realSha; announcedSignature = realSignature; installOldCopy(); start();
 		ready = await until('the update to be downloaded and checked', () => /update#setState ready/.test(mainLog()), 240);
 		const gone = ready && await quit();
 		const swappedOnQuit = gone && await until('the new version to be in place', () => installedVersion() === newVersion, 60);
@@ -169,21 +181,32 @@ async function quit(): Promise<boolean> {
 		check('2. quitting with a downloaded update replaces the app', !!swappedOnQuit, `installed version is ${installedVersion()}; script says: ${read(path.join(updateHome, 'apply.log')).trim().split('\n').pop()}`);
 		check('2. the app stays closed after a plain quit', appPids().length === 0);
 
-		// 3. The zip is not the announced one
-		announcedSha = '0'.repeat(64); installOldCopy(); start();
+		// 3. The zip was changed on the way
+		announcedSha = realSha; announcedSignature = realSignature; changeZipOnTheWay = true; installOldCopy(); start();
 		const refused = await until('the download to be refused', () => /could not prepare version/.test(mainLog()), 240);
 		await sleep(2000);
-		check('3. a zip with another SHA-256 than announced is thrown away', refused && /Hash mismatch/.test(mainLog()) && !fs.existsSync(path.join(updateHome, 'work')), (mainLog().split('\n').find(line => /could not prepare version/.test(line)) ?? '').slice(-90));
+		check('3. a zip that no longer has the announced SHA-256 is thrown away', refused && /Hash mismatch/.test(mainLog()) && !fs.existsSync(path.join(updateHome, 'work')), (mainLog().split('\n').find(line => /could not prepare version/.test(line)) ?? '').slice(-90));
 		await quit(); await sleep(3000);
 		check('3. and the app is unchanged after quitting', installedVersion() === oldVersion && !fs.existsSync(path.join(updateHome, 'apply.log')), `installed version is ${installedVersion()}`);
+		changeZipOnTheWay = false;
 
-		// 4. The app's folder cannot be written
-		announcedSha = realSha; installOldCopy(); zipDownloads = 0;
+		// 4. and 5. A release that the release key did not sign, and one whose signature belongs to another zip
+		for (const [name, sha, signature] of [['4. a release without a signature', realSha, undefined], ['5. a release that announces another zip than the signed one', '0'.repeat(64), realSignature]] as const) {
+			announcedSha = sha; announcedSignature = signature; zipDownloads = 0; installOldCopy(); start();
+			const turnedDown = await until('the release to be turned down', () => /not signed with the release key/.test(mainLog()), 120);
+			await sleep(2000);
+			check(`${name} is turned down before anything is downloaded`, turnedDown && zipDownloads === 0 && !/update#setState downloading/.test(mainLog()), `${zipDownloads} download(s); ${(mainLog().split('\n').find(line => /not signed with the release key/.test(line)) ?? '').slice(-100)}`);
+			await quit(); await sleep(2000);
+		}
+		check('4. and 5. the app is unchanged', installedVersion() === oldVersion, `installed version is ${installedVersion()}`);
+
+		// 6. The app's folder cannot be written
+		announcedSha = realSha; announcedSignature = realSignature; installOldCopy(); zipDownloads = 0;
 		fs.chmodSync(installDir, 0o555);
 		try {
 			start();
 			const offered = await until('the update to be offered', () => /update#setState available for download/.test(mainLog()), 120);
-			check('4. where the app cannot replace itself, the release is only offered', offered && zipDownloads === 0, `${zipDownloads} download(s)`);
+			check('6. where the app cannot replace itself, the release is only offered', offered && zipDownloads === 0, `${zipDownloads} download(s)`);
 			await quit();
 		} finally {
 			fs.chmodSync(installDir, 0o755);

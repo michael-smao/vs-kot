@@ -55,5 +55,13 @@ fs.writeFileSync(out, JSON.stringify(manifest, null, "\t") + "\n");
 console.log(`latest.json describes vs-kot ${manifest.version}`);
 ' "$APP/Contents/Resources/app/product.json" "$SHA" "$OUT/latest.json"
 
+# 6. Sign the release where the release key is. Installed apps take no release without a signature, and
+#    .vs-kot/release.sh publishes none.
+if [ -f "${VS_KOT_SIGNING_KEY:-$HOME/.vs-kot-release/signing-key.pem}" ]; then
+	"$ROOT/.vs-kot/sign-release.sh"
+else
+	echo "Not signed: the release key is not on this Mac. Run .vs-kot/sign-release.sh where the key is, before publishing."
+fi
+
 du -sh "$APP" "$ZIP"
 echo "Check the app with .vs-kot/release-check, then publish with: .vs-kot/release.sh <file with the release notes>"
