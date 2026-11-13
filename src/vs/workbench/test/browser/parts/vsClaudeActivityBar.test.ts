@@ -10,13 +10,14 @@ import { applyVsClaudeActivityBarDefaults } from '../../../browser/parts/vsClaud
 suite('vs-claude activity bar defaults', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('a new profile gets Search and Explorer, with the other built-in views unpinned', () => {
+	test('a new profile gets Search, Explorer and Tab Completion, with the other built-in views unpinned', () => {
 		assert.deepStrictEqual(applyVsClaudeActivityBarDefaults([]), [
 			{ id: 'workbench.view.search', pinned: true, visible: false, order: 0 },
 			{ id: 'workbench.view.explorer', pinned: true, visible: false, order: 1 },
-			{ id: 'workbench.view.scm', pinned: false, visible: false, order: 2 },
-			{ id: 'workbench.view.debug', pinned: false, visible: false, order: 3 },
-			{ id: 'workbench.view.extensions', pinned: false, visible: false, order: 4 },
+			{ id: 'workbench.view.tabCompletion', pinned: true, visible: false, order: 2 },
+			{ id: 'workbench.view.scm', pinned: false, visible: false, order: 3 },
+			{ id: 'workbench.view.debug', pinned: false, visible: false, order: 4 },
+			{ id: 'workbench.view.extensions', pinned: false, visible: false, order: 5 },
 		]);
 	});
 
@@ -33,6 +34,7 @@ suite('vs-claude activity bar defaults', () => {
 		assert.deepStrictEqual(applyVsClaudeActivityBarDefaults(stored), [
 			{ id: 'workbench.view.search', pinned: true, visible: false, order: 1 },
 			{ id: 'workbench.view.explorer', pinned: true, visible: false, order: 0 },
+			{ id: 'workbench.view.tabCompletion', pinned: true, visible: false, order: 2 },
 			{ id: 'workbench.view.scm', pinned: false, visible: false, order: 2 },
 			{ id: 'workbench.view.debug', pinned: false, visible: false, order: 3 },
 			{ id: 'workbench.view.extension.docker', pinned: true, visible: false },

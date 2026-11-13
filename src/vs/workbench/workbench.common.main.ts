@@ -294,6 +294,9 @@ import './contrib/changeReview/browser/changeReview.contribution.js';
 // vs-claude: Team Settings
 import './contrib/vsClaudeTeam/common/teamSettings.contribution.js';
 
+// vs-claude: Tab Completion view
+import './contrib/vsClaudeTabCompletion/browser/tabCompletion.contribution.js';
+
 // Debug
 import './contrib/debug/browser/debug.contribution.js';
 import './contrib/debug/browser/debugEditorContribution.js';

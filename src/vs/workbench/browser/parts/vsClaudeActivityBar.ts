@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// vs-claude: the activity bar shows Search and Explorer only. The other built-in views lose their icon but not
+// vs-claude: the activity bar shows Search, Explorer and Tab Completion only. The other built-in views lose their icon but not
 // their place in the product: they still open from the View menu, the command palette and their shortcuts, and
 // a right click on the bar brings an icon back.
 
@@ -13,7 +13,7 @@
 export const vsClaudeActivityBarDefaultsVersion = 1;
 
 /** The views that keep their icon, in the order they are shown. */
-const shownByDefault: readonly string[] = ['workbench.view.search', 'workbench.view.explorer'];
+const shownByDefault: readonly string[] = ['workbench.view.search', 'workbench.view.explorer', 'workbench.view.tabCompletion'];
 
 /** The views that lose their icon. */
 const hiddenByDefault: readonly string[] = ['workbench.view.scm', 'workbench.view.debug', 'workbench.view.extensions'];

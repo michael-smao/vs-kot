@@ -231,6 +231,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/vsClaudeTabCompletion",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/contrib/search",
 			"project": "vscode-workbench"
 		},
