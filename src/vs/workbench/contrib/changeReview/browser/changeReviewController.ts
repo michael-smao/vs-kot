@@ -38,7 +38,7 @@ import { IQuickInputService } from '../../../../platform/quickinput/common/quick
 import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, ChangeReviewCommandId, ChangeReviewFileKind, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewEditor, IChangeReviewService } from '../common/changeReview.js';
+import { CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, ChangeReviewCommandId, ChangeReviewFileKind, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewEditor, IChangeReviewFile, IChangeReviewService } from '../common/changeReview.js';
 import { findClaudeEntry, IClaudeRecordEntry, IClaudeRecordService } from '../common/claudeRecord.js';
 import { IChangeReviewFilesService, ReviewedFile } from './changeReviewedFile.js';
 
@@ -193,6 +193,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			this._bar.value?.layout();
 		}));
 		this._register(this._service.onDidChange(() => this._onDidChangeService()));
+		this._register(this._service.onDidChangeOpeningFile(() => this._updateBar())); // an editor without a file may get the bar, see _getOpeningFile
 		this._register(this._editor.onDidChangeConfiguration(e => {
 			if (e.hasChanged(EditorOption.fontInfo) || e.hasChanged(EditorOption.lineHeight) || e.hasChanged(EditorOption.wrappingInfo)) {
 				this._redraw(); // the removed lines are drawn here, not by the editor: with the old font otherwise
@@ -729,8 +730,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 	/** Shows the bar, brings it up to date, or takes it away. Nothing else decides whether there is a bar. */
 	private _updateBar(): void {
-		const model = this._editor.getModel();
-		const state = model ? this._getBarState(model) : undefined;
+		const state = this._getBarState(this._editor.getModel());
 		if (!state) {
 			this._bar.clear();
 			return;
@@ -758,9 +758,36 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		this._bar.value.update(state);
 	}
 
-	/** What the bar shows for the file in the editor, or `undefined` when the file gets no bar. */
-	private _getBarState(model: ITextModel): IBarState | undefined {
-		const fileUri = this._getFileUri(model);
+	/**
+	 * The file that the review is opening in this editor, while the editor has none. The workbench empties an editor
+	 * before it gives it the next file, and it takes another editor for a file of another kind (a deleted file),
+	 * which may be hidden or not even built when the opening begins.
+	 */
+	private _getOpeningFile(): IChangeReviewFile | undefined {
+		const file = this._service.openingFile;
+		if (!file || this._editor.hasModel() || !this._isReviewEditor()) {
+			return undefined;
+		}
+
+		// The editor of the editor area that is on screen, or an editor that is not on screen: the file may come to
+		// that one. Any other editor that happens to be empty, in a view or an input box, is none of the review's.
+		const isOnScreen = this._editor.getContainerDomNode().isConnected;
+		return !isOnScreen || this._editorService.visibleTextEditorControls.includes(this._editor) ? file : undefined;
+	}
+
+	/**
+	 * What the bar shows for the file in the editor, or `undefined` when the file gets no bar.
+	 *
+	 * An editor that has no file shows the bar of the file that is opening in it, the way it does for a file whose
+	 * changes are not computed yet. So there is a bar at every moment between two files, and a click on the spot of
+	 * an arrow is not lost.
+	 */
+	private _getBarState(model: ITextModel | null): IBarState | undefined {
+		const fileUri = model ? this._getFileUri(model) : this._getOpeningFile()?.uri;
+		if (!fileUri) {
+			return undefined;
+		}
+
 		const pendingFiles = this._service.pendingFiles;
 		const fileIndex = pendingFiles.findIndex(file => isEqual(file.uri, fileUri));
 
@@ -960,8 +987,9 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 	}
 
 	async goToFile(previous: boolean): Promise<void> {
+		// Without a file in the editor, the bar is that of the file which is opening: the step goes on from there
 		const model = this._editor.getModel();
-		await this._service.navigateFile(model ? this._getFileUri(model) : undefined, previous);
+		await this._service.navigateFile(model ? this._getFileUri(model) : this._getOpeningFile()?.uri, previous);
 	}
 
 	// --- decisions
@@ -1264,6 +1292,8 @@ const BAR_MARGIN = 16;
  * files without looking for them again. For that the bar hangs by its right end on a point that only
  * depends on the size of the editor, and whatever differs between files makes it longer or shorter at
  * its left end.
+ *
+ * The bar is a widget of the editor, and it is still there while the editor has no file: see {@link _park}.
  */
 class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 
@@ -1273,6 +1303,8 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 	/** The point the bar hangs on. It has no size of its own. */
 	private readonly _domNode: HTMLElement;
 	private _position: IOverlayWidgetPosition | null = null;
+	/** Where the bar is while the editor has no file: see {@link _park}. */
+	private readonly _standIn: HTMLElement;
 
 	private readonly _changeSection: HTMLElement;
 	private readonly _previousChange: Button;
@@ -1293,6 +1325,7 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 		super();
 
 		this._domNode = $('.change-review-bar-anchor');
+		this._standIn = $('.monaco-editor.change-review-bar-stand-in');
 		const bar = append(this._domNode, $('.change-review-bar-widget'));
 		const iconButton = (container: HTMLElement, icon: string, action: keyof IBarActions) => {
 			const button = createButton(container, this._store, { label: `$(${icon})`, title: titles[action], primary: false, run: () => actions[action]() }, true);
@@ -1317,8 +1350,34 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 		this._nextFile = iconButton(fileSection, 'arrow-right', 'nextFile');
 
 		this._editor.addOverlayWidget(this);
-		this._register(toDisposable(() => this._editor.removeOverlayWidget(this)));
+		this._register(toDisposable(() => {
+			this._editor.removeOverlayWidget(this);
+			// an editor without a file does not take the bar out of the page
+			this._domNode.remove();
+			this._standIn.remove();
+		}));
+		this._register(this._editor.onDidChangeModel(() => this._park()));
+		this._park();
 		this.layout();
+	}
+
+	/**
+	 * An editor without a file has no place for its widgets: it takes them out of the page, and puts them back
+	 * when it has its next file. In between the bar waits in an element that stands in for the editor: it is at
+	 * the editor's top left corner, and an editor to the style sheets. So the bar is in the same place and looks
+	 * the same.
+	 */
+	private _park(): void {
+		if (this._editor.hasModel()) {
+			this._standIn.remove(); // the editor has taken the bar back
+			return;
+		}
+
+		const container = this._editor.getContainerDomNode();
+		if (this._domNode.parentElement !== this._standIn || this._standIn.parentElement !== container) {
+			this._standIn.appendChild(this._domNode);
+			container.prepend(this._standIn);
+		}
 	}
 
 	getId(): string {
@@ -1362,13 +1421,16 @@ class ChangeReviewBarWidget extends Disposable implements IOverlayWidget {
 	layout(): void {
 		const layoutInfo = this._editor.getLayoutInfo();
 		const end = Math.min(layoutInfo.width / 2 + BAR_END_FROM_MIDDLE, layoutInfo.width - layoutInfo.verticalScrollbarWidth - BAR_MARGIN);
+		const top = layoutInfo.height - layoutInfo.horizontalScrollbarHeight - BAR_MARGIN;
+		const left = Math.round(end);
 
-		this._position = {
-			preference: {
-				top: layoutInfo.height - layoutInfo.horizontalScrollbarHeight - BAR_MARGIN,
-				left: Math.round(end)
-			}
-		};
+		this._position = { preference: { top, left } };
 		this._editor.layoutOverlayWidget(this);
+
+		// The editor moves a widget to its place at its next frame only, and not at all while it has no file. A bar
+		// that is new, or that waits for the next file, would hang in the top left corner of the editor until then,
+		// and a click on the spot of an arrow would miss it. So the bar says itself where it is.
+		this._domNode.style.top = `${top}px`;
+		this._domNode.style.left = `${left}px`;
 	}
 }

@@ -79,6 +79,14 @@ export interface IChangeReviewService {
 	readonly pendingFiles: readonly IChangeReviewFile[];
 	readonly requests: readonly IChangeReviewRequest[];
 
+	/**
+	 * The file that {@link revealNextFile} or {@link navigateFile} is opening at the moment. The editor it comes
+	 * to has no file for a moment before it shows this one.
+	 */
+	readonly openingFile: IChangeReviewFile | undefined;
+	/** Fires when a file starts to be opened, and when that is over. */
+	readonly onDidChangeOpeningFile: Event<void>;
+
 	/** Looks a file up by what an editor shows for it. */
 	getFile(editorUri: URI): IChangeReviewFile | undefined;
 

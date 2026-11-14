@@ -122,6 +122,18 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 			let at = await barWhen(() => true);
 			const total = Number(at?.file.match(/of (\d+)$/)?.[1] ?? 0);
 			const spot = at?.next;
+			// From one file to the next the bar leaves the page and enters it again, more than once: the editor has no file
+			// for a moment, and moves a widget to its place at its next frame only. The page notes at each of those moments
+			// where the arrow to the next file is. A click that comes then must not miss it, nor find no bar at all.
+			await page.evaluate(() => {
+				window.barMoments = [];
+				const hasBar = n => n.nodeType === 1 && (n.matches('.change-review-bar-widget') || !!n.querySelector('.change-review-bar-widget'));
+				new MutationObserver(records => {
+					if (!records.some(r => [...r.addedNodes, ...r.removedNodes].some(hasBar))) { return; }
+					const next = [...document.querySelectorAll('.editor-group-container.active .change-review-bar-widget')].find(b => b.getBoundingClientRect().width > 0)?.querySelectorAll('.change-review-bar-section')[2].querySelectorAll('.monaco-button')[1].getBoundingClientRect();
+					window.barMoments.push(next ? `${Math.round(next.left * 10) / 10}-${Math.round(next.right * 10) / 10}` : 'no bar');
+				}).observe(document.body, { childList: true, subtree: true });
+			});
 			const nextFile = async () => { const before = at.file; await page.mouse.click((spot.left + spot.right) / 2, spot.y); at = await barWhen(s => s.file !== before); return at; };
 			const seen = at ? [at] : [];
 			while (seen.length < total && await nextFile()) { seen.push(at); }
@@ -132,6 +144,8 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 			const arrows = ['up', 'down', 'previous', 'next'].map(key => `${key} ${places(seen, key).join(' and ') || 'never shown'}`);
 			const approveEnds = [...new Set(seen.map(s => s.approve?.right))];
 			check('review bar: every arrow is at one place in every file, and Approve File ends at one place', reached === total && ['up', 'down', 'previous', 'next'].every(key => places(seen, key).length === 1) && approveEnds.length === 1, `in ${reached} of ${total} files: ${arrows.join(', ')}, Approve File ends at ${approveEnds.join(' and ')}`);
+			const moments = await page.evaluate(() => window.barMoments);
+			check('review bar: from file to file a bar is there at every moment, with its arrows in that place', moments.length > 0 && moments.every(place => place === places(seen, 'next')[0]), `the bar entered or left the page ${moments.length} times, the arrow to the next file was then at ${[...new Set(moments)].join(' and ') || 'no place'}`);
 
 			// the file with twelve changes: the arrow to the next change, clicked on one spot
 			const toFile = async wanted => { for (let i = 0; at && !wanted(at) && i < total; i++) { await nextFile(); } return at && wanted(at) ? at : undefined; };

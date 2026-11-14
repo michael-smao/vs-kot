@@ -63,6 +63,16 @@
  * left. Its right end, with the buttons that step through the files, is in the same spot for every file.
  */
 .monaco-editor .change-review-bar-anchor {
+	position: absolute; /* the editor says so too, but not while it has no file */
+	width: 0;
+	height: 0;
+}
+
+/*
+ * While the editor has no file, the bar is in an element that stands in for the editor: it is where the
+ * editor's top left corner is, and has no size.
+ */
+.monaco-editor.change-review-bar-stand-in {
 	width: 0;
 	height: 0;
 }

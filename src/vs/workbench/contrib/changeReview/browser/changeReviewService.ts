@@ -53,6 +53,9 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
+	private readonly _onDidChangeOpeningFile = this._register(new Emitter<void>());
+	readonly onDidChangeOpeningFile: Event<void> = this._onDidChangeOpeningFile.event;
+
 	private _files: IChangeReviewFile[] = [];
 	private _filesByEditorUri = new ResourceMap<IChangeReviewFile>();
 
@@ -64,6 +67,8 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	private _requests: IChangeReviewRequest[] = [];
 	/** The file that {@link navigateFile} is opening at the moment. */
 	private _navigationTarget: IChangeReviewFile | undefined;
+	/** The file that {@link _openFile} is opening at the moment, whoever asked for it. */
+	private _openingFile: IChangeReviewFile | undefined;
 
 	/** Whether the reviewer wrote in the active editor since they went there. Then they are working in it, not waiting for changes. */
 	private _isWritingInActiveEditor = false;
@@ -144,6 +149,10 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 
 	get requests(): readonly IChangeReviewRequest[] {
 		return this._requests;
+	}
+
+	get openingFile(): IChangeReviewFile | undefined {
+		return this._openingFile;
 	}
 
 	getFile(editorUri: URI): IChangeReviewFile | undefined {
@@ -365,19 +374,30 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	}
 
 	private async _openFile(file: IChangeReviewFile, preserveFocus = false): Promise<void> {
-		const pane = await this._editorService.openEditor({
-			resource: file.editorUri,
-			label: file.kind === ChangeReviewFileKind.Deleted ? localize('deletedFileLabel', "{0} (Deleted)", basename(file.uri)) : undefined,
-			options: { revealIfOpened: true, preserveFocus }
-		});
+		// The editor has no file from now until this one is there. It keeps its bar for that time: see openingFile
+		this._openingFile = file;
+		this._onDidChangeOpeningFile.fire();
+		try {
+			const pane = await this._editorService.openEditor({
+				resource: file.editorUri,
+				label: file.kind === ChangeReviewFileKind.Deleted ? localize('deletedFileLabel', "{0} (Deleted)", basename(file.uri)) : undefined,
+				options: { revealIfOpened: true, preserveFocus }
+			});
 
-		const control = pane?.getControl();
-		if (isCodeEditor(control) && isEqual(control.getModel()?.uri, file.editorUri)) {
-			control.getContribution<IChangeReviewEditor>(CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID)?.revealFirstPendingChange();
-		} else if (pane && isEqual(EditorResourceAccessor.getOriginalUri(pane.input, { supportSideBySide: SideBySideEditor.PRIMARY }), file.editorUri)) {
-			// Only when the file is what the editor shows now. When the reviewer went on to another file
-			// before this one was open, there is nothing to offer.
-			this._offerFileApproval(file);
+			const control = pane?.getControl();
+			if (isCodeEditor(control) && isEqual(control.getModel()?.uri, file.editorUri)) {
+				control.getContribution<IChangeReviewEditor>(CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID)?.revealFirstPendingChange();
+			} else if (pane && isEqual(EditorResourceAccessor.getOriginalUri(pane.input, { supportSideBySide: SideBySideEditor.PRIMARY }), file.editorUri)) {
+				// Only when the file is what the editor shows now. When the reviewer went on to another file
+				// before this one was open, there is nothing to offer.
+				this._offerFileApproval(file);
+			}
+		} finally {
+			// Unless the reviewer went on in the meantime: then the next file is opening
+			if (this._openingFile === file) {
+				this._openingFile = undefined;
+				this._onDidChangeOpeningFile.fire();
+			}
 		}
 	}
 
