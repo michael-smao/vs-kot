@@ -1988,6 +1988,47 @@ export class CommandCenter {
 		return results[0];
 	}
 
+	// vs-kot: what the change review needs to keep a reviewed version of its own, for a file whose changes were
+	// staged by someone else: the id of the blob that is staged, the text of a blob, or a blob for a text.
+	@command('git.reviewedBlob')
+	async reviewedBlob(uri: Uri, request: { readonly read?: string; readonly write?: string }): Promise<{ readonly blob?: string; readonly text?: string } | undefined> {
+		if (!uri || uri.scheme !== 'file' || !request) {
+			return undefined;
+		}
+
+		const encoding = workspace.textDocuments.find(document => document.uri.toString() === uri.toString())?.encoding ?? 'utf8';
+
+		try {
+			const results = await this.runByRepository(uri, async (repository, resource) => {
+				if (typeof request.read === 'string') {
+					let content: Buffer;
+					try {
+						content = await repository.readBlob(request.read);
+					} catch {
+						return {}; // git does not have that blob, or not anymore
+					}
+					return { text: await workspace.decode(content, { encoding }) };
+				}
+				if (typeof request.write === 'string') {
+					return { blob: await repository.writeBlob(await workspace.encode(request.write, { encoding })) };
+				}
+				try {
+					return { blob: (await repository.getObjectDetails('', resource.fsPath)).object };
+				} catch (err) {
+					if (err.gitErrorCode !== GitErrorCodes.UnknownPath) {
+						throw err;
+					}
+					return {}; // git has no staged version of the file
+				}
+			});
+
+			return results[0];
+		} catch {
+			// Nothing when git failed, as when the file is in no repository: the caller asks again later
+			return undefined;
+		}
+	}
+
 	@command('git.revertChange')
 	async revertChange(uri: Uri, changes: LineChange[], index: number): Promise<void> {
 		if (!uri) {

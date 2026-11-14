@@ -145,7 +145,7 @@ class ChangeReviewStatusContribution extends Disposable implements IWorkbenchCon
 
 registerWorkbenchContribution2(ChangeReviewStatusContribution.ID, ChangeReviewStatusContribution, WorkbenchPhase.AfterRestored);
 
-/** Offers to connect Claude Code for as long as it is not connected. */
+/** Offers to connect Claude Code for as long as it is not connected, and to update a connection that an earlier version made. */
 class ClaudeConnectionStatusContribution extends Disposable implements IWorkbenchContribution {
 
 	static readonly ID = 'workbench.contrib.changeReviewClaudeConnection';
@@ -165,20 +165,27 @@ class ClaudeConnectionStatusContribution extends Disposable implements IWorkbenc
 	}
 
 	private _update(): void {
-		if (!this._service.enabled || this._claudeRecordService.connectionState !== ClaudeConnectionState.NotConnected) {
+		const state = this._claudeRecordService.connectionState;
+		if (!this._service.enabled || (state !== ClaudeConnectionState.NotConnected && state !== ClaudeConnectionState.NeedsUpdate)) {
 			this._entry.clear();
 			return;
 		}
 
-		if (!this._entry.value) {
-			const label = localize('claudeStatusConnect', "Connect Claude Code");
-			this._entry.value = this._statusbarService.addEntry({
-				name: localize('claudeStatusName', "Claude Code Connection"),
-				text: `$(plug) ${label}`,
-				ariaLabel: label,
-				tooltip: localize('claudeStatusTooltip', "Let the change review mark the changes that Claude Code made"),
-				command: ChangeReviewCommandId.ClaudeConnection
-			}, 'status.changeReview.claudeConnection', StatusbarAlignment.LEFT, 99);
+		const needsUpdate = state === ClaudeConnectionState.NeedsUpdate;
+		const label = needsUpdate ? localize('claudeStatusUpdate', "Update Claude Code Connection") : localize('claudeStatusConnect', "Connect Claude Code");
+		const entry = {
+			name: localize('claudeStatusName', "Claude Code Connection"),
+			text: `$(plug) ${label}`,
+			ariaLabel: label,
+			tooltip: needsUpdate
+				? localize('claudeStatusUpdateTooltip', "Let the change review keep under review what Claude Code staged or committed")
+				: localize('claudeStatusTooltip', "Let the change review mark the changes that Claude Code made"),
+			command: ChangeReviewCommandId.ClaudeConnection
+		};
+		if (this._entry.value) {
+			this._entry.value.update(entry);
+		} else {
+			this._entry.value = this._statusbarService.addEntry(entry, 'status.changeReview.claudeConnection', StatusbarAlignment.LEFT, 99);
 		}
 	}
 }
@@ -448,13 +455,39 @@ registerAction2(class ClaudeConnectionAction extends Action2 {
 			return;
 		}
 
+		if (state === ClaudeConnectionState.NeedsUpdate) {
+			const { result: choice } = await dialogService.prompt<'update' | 'disconnect' | undefined>({
+				type: Severity.Info,
+				message: localize('claudeUpdateMessage', "Update the Connection of Claude Code to the Change Review?"),
+				detail: [
+					localize('claudeUpdateDetail', "Claude Code is connected, and the review marks the changes it made. With the update, a change that Claude Code staged or committed stays under review as well: only what you approve or stage yourself counts as reviewed."),
+					localize('claudeUpdateHooks', "This adds two hooks to {0}. One of them runs before each shell command of Claude Code and notes what is staged, for commands that name git.", settingsFile)
+				].join('\n\n'),
+				buttons: [
+					{ label: localize({ key: 'claudeUpdate', comment: ['&& denotes a mnemonic'] }, "&&Update"), run: () => 'update' as const },
+					{ label: localize({ key: 'claudeUpdateDisconnect', comment: ['&& denotes a mnemonic'] }, "&&Disconnect"), run: () => 'disconnect' as const }
+				],
+				cancelButton: { label: localize('claudeUpdateLater', "Not Now"), run: () => undefined }
+			});
+			try {
+				if (choice === 'update') {
+					await claudeRecordService.connect();
+				} else if (choice === 'disconnect') {
+					await claudeRecordService.disconnect();
+				}
+			} catch (error) {
+				notificationService.error(error instanceof ClaudeSettingsError ? error.message : localize('claudeUpdateFailed', "The connection of Claude Code could not be changed: {0}", toErrorMessage(error)));
+			}
+			return;
+		}
+
 		if (state === ClaudeConnectionState.Connected) {
 			const { result: disconnect } = await dialogService.prompt<boolean>({
 				type: Severity.Info,
 				message: localize('claudeConnectedMessage', "Claude Code Is Connected to the Change Review"),
 				detail: [
 					describeLastHeard(await claudeRecordService.getLastHeard()),
-					localize('claudeConnectedDetail', "The review marks the changes that Claude Code made. The hooks that tell it are in {0}.", settingsFile)
+					localize('claudeConnectedDetail', "The review marks the changes that Claude Code made, and keeps under review what it staged or committed. The hooks that tell it are in {0}.", settingsFile)
 				].join('\n\n'),
 				buttons: [
 					{ label: localize('claudeConnectionOk', "OK"), run: () => false },
@@ -474,7 +507,7 @@ registerAction2(class ClaudeConnectionAction extends Action2 {
 		const { confirmed } = await dialogService.confirm({
 			type: Severity.Info,
 			message: localize('claudeConnectMessage', "Connect Claude Code to the Change Review?"),
-			detail: localize('claudeConnectDetail', "Claude Code then notes which files it changes, and the review marks those changes as Claude's.\n\nThis adds two hooks to {0}. What they note is kept in {1} and stays on this computer.", settingsFile, labelService.getUriLabel(claudeRecordService.recordFolder)),
+			detail: localize('claudeConnectDetail', "Claude Code then notes which files it changes and what it stages or commits. The review marks its changes as Claude's, and keeps them under review until you approve them, also when Claude Code staged or committed them.\n\nThis adds four hooks to {0}: after each edit, and before and after each shell command. What they note is kept in {1} and stays on this computer.", settingsFile, labelService.getUriLabel(claudeRecordService.recordFolder)),
 			primaryButton: localize({ key: 'claudeConnect', comment: ['&& denotes a mnemonic'] }, "&&Connect")
 		});
 		if (!confirmed) {

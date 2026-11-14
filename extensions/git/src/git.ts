@@ -1645,6 +1645,42 @@ export class Repository {
 		return stdout;
 	}
 
+	// vs-kot: a blob by its id, and a blob for a content. The change review names the version of a file that was
+	// last agreed to by the id of its blob, where that is not the version that is staged.
+	async readBlob(object: string): Promise<Buffer> {
+		const child = this.stream(['cat-file', 'blob', object]);
+
+		if (!child.stdout) {
+			return Promise.reject<Buffer>('Can\'t open file from git');
+		}
+
+		const { exitCode, stdout } = await exec(child);
+
+		if (exitCode) {
+			return Promise.reject<Buffer>(new GitError({ message: 'Could not show object.', exitCode }));
+		}
+
+		return stdout;
+	}
+
+	async writeBlob(data: Uint8Array): Promise<string> {
+		const child = this.stream(['hash-object', '--stdin', '-w'], { stdio: [null, null, null] });
+
+		if (!child.stdin) {
+			throw new GitError({ message: 'Failed to spawn git process', exitCode: -1 });
+		}
+
+		child.stdin.end(data);
+
+		const { exitCode, stdout } = await exec(child);
+
+		if (exitCode) {
+			throw new GitError({ message: 'Could not hash object.', exitCode });
+		}
+
+		return stdout.toString('utf8').trim();
+	}
+
 	async getObjectDetails(treeish: string, path: string): Promise<{ mode: string; object: string; size: number }> {
 		if (!treeish || treeish === ':1' || treeish === ':2' || treeish === ':3') { // index
 			const elements = await this.lsfiles(path);

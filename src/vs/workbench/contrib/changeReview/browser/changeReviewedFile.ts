@@ -13,6 +13,11 @@
 //
 // One such object exists per file and lives as long as the file is loaded. So all editors of a file agree, and what
 // was typed is still known as the reviewer's own after a switch to another tab and back.
+//
+// What git has staged only counts as reviewed when the reviewer staged it. Claude Code stages and commits too. A
+// file whose changes it staged is held under review (see ../common/claudeRecord.ts): its reviewed version is then
+// the one from before, kept as a blob of its own, and git is not asked to stage it until the reviewer agreed to
+// all there is in the file. Staging less would take out of git what Claude Code put there.
 
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
@@ -20,6 +25,7 @@ import { hash } from '../../../../base/common/hash.js';
 import { Disposable, IReference, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { Schemas } from '../../../../base/common/network.js';
+import { isEqual } from '../../../../base/common/resources.js';
 import { Range } from '../../../../editor/common/core/range.js';
 import { DetailedLineRangeMapping, LineRangeMapping, RangeMapping } from '../../../../editor/common/diff/rangeMapping.js';
 import { ILanguageService } from '../../../../editor/common/languages/language.js';
@@ -32,6 +38,7 @@ import { createDecorator, IInstantiationService } from '../../../../platform/ins
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
 import { IQuickDiffModelService, QuickDiffModel } from '../../scm/browser/quickDiffModel.js';
 import { ChangeReviewFileKind, IChangeReviewService } from '../common/changeReview.js';
+import { ClaudeConnectionState, IClaudeHold, IClaudeRecordService } from '../common/claudeRecord.js';
 
 /** An edit with one of these origins reaches a file from outside the editor. Everything else is the reviewer's own doing. */
 const OUTSIDE_SOURCES: ReadonlySet<string> = new Set(['reloadFromDisk', 'setValue', 'Chat.applyEdits', 'inlineChat.applyEdits']);
@@ -44,6 +51,14 @@ const FIRST_SIGHT_KEPT_MS = 15_000;
 /** How long after the reviewer's own edit the changes are computed anew, to make sure they are still what is shown. */
 const VERIFY_DELAY_MS = 800;
 const DIFF_DELAY_MS = 100;
+/** How long until it is looked again whether a shell command of Claude Code, which may have staged the file, has ended. */
+const COMMAND_RUNNING_DELAY_MS = 2000;
+
+/** What git answers when it is asked about a blob: its id, its text, or neither. */
+interface IBlobAnswer {
+	readonly blob?: string;
+	readonly text?: string;
+}
 
 export class ReviewedFile extends Disposable {
 
@@ -107,6 +122,30 @@ export class ReviewedFile extends Disposable {
 	private _firstSight: string | undefined;
 	private readonly _forgetFirstSight = this._register(new RunOnceScheduler(() => this._firstSight = undefined, FIRST_SIGHT_KEPT_MS));
 
+	/** Whether it is known which files are held under review. Until then no version is taken as the reviewed one. */
+	private _areHoldsKnown = false;
+	/** Set while the file is held under review: the reviewed version is not the one git has staged. */
+	private _hold: IClaudeHold | undefined;
+	/** Whether the reviewed version is that of {@link _hold}. It is not while its blob is being read. */
+	private _isHoldApplied = false;
+	private _holdRequestId = 0;
+	/** The blobs that were written here for the reviewed version. One of them coming back as the hold's is no news. */
+	private readonly _writtenBlobs: string[] = [];
+	/** The reviewed version of a held file is stored one at a time, the latest one last. */
+	private _persistNext: string | undefined;
+	private _isPersisting = false;
+	private _holdCheckId = 0;
+	private _isCheckingHold = false;
+	private readonly _checkHoldScheduler = this._register(new RunOnceScheduler(() => this._checkHold(), COMMAND_RUNNING_DELAY_MS));
+	/** Git cannot be asked for a while after the window opened. The reviewed version of a held file is read once it can. */
+	private readonly _applyHoldScheduler = this._register(new RunOnceScheduler(() => {
+		if (this._hold && !this._isHoldApplied) {
+			this._applyHold(this._hold);
+		}
+	}, COMMAND_RUNNING_DELAY_MS));
+	private _outsideIndexId = 0;
+	private readonly _outsideIndexScheduler = this._register(new RunOnceScheduler(() => this._takeOutsideIndex(), COMMAND_RUNNING_DELAY_MS));
+
 	constructor(
 		readonly model: ITextModel,
 		@IChangeReviewService private readonly _changeReviewService: IChangeReviewService,
@@ -116,6 +155,7 @@ export class ReviewedFile extends Disposable {
 		@ILanguageService private readonly _languageService: ILanguageService,
 		@ICommandService private readonly _commandService: ICommandService,
 		@ITextFileService private readonly _textFileService: ITextFileService,
+		@IClaudeRecordService private readonly _claudeRecordService: IClaudeRecordService,
 	) {
 		super();
 
@@ -123,6 +163,19 @@ export class ReviewedFile extends Disposable {
 		this._alternativeVersionId = model.getAlternativeVersionId();
 		this._rememberFirstSight();
 		this._register(model.onDidChangeContent(e => this._onDidChangeModelContent(e)));
+		this._register(this._claudeRecordService.onDidChangeHolds(uri => {
+			if (isEqual(uri, model.uri)) {
+				this._syncHold();
+			}
+		}));
+		this._claudeRecordService.whenHoldsKnown.then(() => {
+			if (!this._store.isDisposed) {
+				this._areHoldsKnown = true;
+				this._syncHold();
+				this._seenIndex = undefined;
+				this._onDidChangeIndex();
+			}
+		});
 
 		this.acquireStagedVersion();
 		if (this._isEnabled && !this._baseline.value && model.getValueLength() === 0) {
@@ -133,7 +186,7 @@ export class ReviewedFile extends Disposable {
 
 	/** Whether git was asked to stage something and has not been seen to have it yet. It then still lists the file as before. */
 	get isStagePending(): boolean {
-		return this._expectedIndex !== undefined || this._isStaging;
+		return this._expectedIndex !== undefined || this._isStaging || this._isPersisting || this._isCheckingHold || (this._hold !== undefined && !this._isHoldApplied);
 	}
 
 	/**
@@ -146,7 +199,8 @@ export class ReviewedFile extends Disposable {
 
 	/** What the changes are computed against. `undefined` while git has not served the staged version, or has none. */
 	get baseline(): ITextModel | undefined {
-		return this._baseline.value;
+		// A held file is reviewed against a version that is being read: what is there until then is not it
+		return this._hold && !this._isHoldApplied ? undefined : this._baseline.value;
 	}
 
 	/** Which lines of the reviewed version became which lines of the file. Only meaningful while {@link isCurrent}. */
@@ -156,7 +210,7 @@ export class ReviewedFile extends Disposable {
 
 	/** Whether {@link mappings} describe the file and its reviewed version as they are right now. */
 	get isCurrent(): boolean {
-		const baseline = this._baseline.value;
+		const baseline = this.baseline;
 		return !!baseline && this._diffVersions?.baseline === baseline.getVersionId() && this._diffVersions.model === this.model.getVersionId();
 	}
 
@@ -191,8 +245,8 @@ export class ReviewedFile extends Disposable {
 	}
 
 	private _onDidChangeIndex(): void {
-		if (!this._isEnabled) {
-			return; // nothing is reviewed, so nothing is kept or computed
+		if (!this._isEnabled || !this._areHoldsKnown) {
+			return; // nothing is reviewed, so nothing is kept or computed. Or not yet.
 		}
 
 		const index = this._index;
@@ -200,6 +254,11 @@ export class ReviewedFile extends Disposable {
 			// No staged version: the file is new, ignored, in a conflict, not in a repository, or not known yet
 			this._seenIndex = undefined;
 			this._seenIndexHash = undefined;
+			if (this._hold) {
+				this._gitContents = undefined;
+				this._checkHold();
+				return;
+			}
 			if (this._baseline.value && !this._isVirtual) {
 				this._clearBaseline();
 				this._onDidChange.fire();
@@ -224,6 +283,10 @@ export class ReviewedFile extends Disposable {
 				this._giveUpExpectedIndex.cancel();
 				this._seenIndexHash = contentsHash;
 				this._gitContents = contents;
+				if (this._hold) {
+					this._checkHold(); // all of a held file was agreed to and is staged now
+					return;
+				}
 				if (baseline) {
 					this._isVirtual = false;
 					if (baseline.getValue() !== contents) {
@@ -247,6 +310,12 @@ export class ReviewedFile extends Disposable {
 		this._seenIndexHash = contentsHash;
 		this._gitContents = contents;
 
+		if (this._hold) {
+			// Held under review: the reviewed version is not what git has staged. Whether that goes on is looked at.
+			this._checkHold();
+			return;
+		}
+
 		if (!baseline || this._isVirtual) {
 			// The first sight of the staged version. If the file was the same when it was first seen, all that
 			// differs now was written here in the meantime, by the reviewer.
@@ -258,9 +327,305 @@ export class ReviewedFile extends Disposable {
 			this._hasUnstagedOwnEdits = reviewed !== contents;
 		} else if (baseline.getValue() !== contents) {
 			// Git has another staged version: something was staged or unstaged outside of this editor
+			this._takeOutsideIndex();
+		}
+	}
+
+	/**
+	 * Takes over a staged version that was not staged here. When the reviewer staged it in their own git tool, it
+	 * counts as reviewed. When Claude Code did, it does not: the script says so once the shell command of Claude
+	 * Code has ended, and the file is held then. Until that is known, the reviewed version stays what it is.
+	 */
+	private async _takeOutsideIndex(): Promise<void> {
+		const requestId = ++this._outsideIndexId;
+		this._outsideIndexScheduler.cancel();
+
+		let isCommandRunning = false;
+		if (this._claudeRecordService.connectionState === ClaudeConnectionState.Connected) {
+			try {
+				isCommandRunning = await this._claudeRecordService.settle(this.model.uri);
+			} catch {
+				isCommandRunning = false;
+			}
+			if (this._store.isDisposed || requestId !== this._outsideIndexId) {
+				return;
+			}
+		}
+
+		if (this._hold) {
+			return; // Claude Code staged it, as was found meanwhile
+		}
+		if (this._claudeRecordService.getHold(this.model.uri)) {
+			this._syncHold();
+			return;
+		}
+		if (isCommandRunning) {
+			this._outsideIndexScheduler.schedule();
+			return;
+		}
+
+		const baseline = this._baseline.value;
+		const contents = this._gitContents;
+		if (!this._isEnabled || !baseline || this._isVirtual || contents === undefined || this._expectedIndex !== undefined) {
+			return;
+		}
+		if (baseline.getValue() !== contents) {
 			baseline.setValue(contents);
 			this._hasUnstagedOwnEdits = false;
 			this._computeDiff();
+		}
+	}
+
+	// --- held under review: Claude Code staged the file
+
+	/** Follows what is stored about the file being held under review. */
+	private _syncHold(): void {
+		if (!this._areHoldsKnown) {
+			return;
+		}
+
+		const before = this._hold;
+		const hold = this._isEnabled ? this._claudeRecordService.getHold(this.model.uri) : undefined;
+		this._hold = hold;
+
+		if (!hold) {
+			if (before) {
+				// The reviewer is done with the file, here or in another window. What git has staged counts again.
+				this._isHoldApplied = false;
+				this._holdRequestId++;
+				this._holdCheckId++;
+				this._isCheckingHold = false;
+				this._checkHoldScheduler.cancel();
+				this._applyHoldScheduler.cancel();
+				this._persistNext = undefined;
+				if (this._isEnabled) {
+					if (this._expectedIndex !== undefined) {
+						// The reviewed version is what git has staged, as was just found: nothing to take over
+						this._seenIndex = undefined;
+						this._onDidChangeIndex();
+					} else {
+						this._adoptIndex();
+					}
+					this._onDidChange.fire();
+				}
+			}
+			return;
+		}
+
+		const isKnownVersion = before !== undefined && this._isHoldApplied && (before.reviewed === hold.reviewed || (hold.reviewed !== null && this._writtenBlobs.includes(hold.reviewed)));
+		if (isKnownVersion) {
+			this._checkHold(); // Claude Code staged more, or what was agreed to here is stored now
+		} else {
+			this._applyHold(hold);
+		}
+	}
+
+	/** Makes the version that the reviewer last agreed to the reviewed one, in place of what git has staged. */
+	private async _applyHold(hold: IClaudeHold): Promise<void> {
+		const requestId = ++this._holdRequestId;
+		const wasApplied = this._isHoldApplied;
+		this._applyHoldScheduler.cancel();
+		this._isHoldApplied = false;
+		this._outsideIndexId++;
+		this._outsideIndexScheduler.cancel();
+		// What git was asked to stage here does not decide anything anymore
+		this._expectedIndex = undefined;
+		this._isExpectedConfirmed = false;
+		this._stageNext = undefined;
+		this._giveUpExpectedIndex.cancel();
+		if (wasApplied || this._baseline.value) {
+			this._onDidChange.fire(); // nothing is known about the file until its reviewed version is read
+		}
+
+		let text: string | undefined;
+		if (hold.reviewed !== null) {
+			const answer = await this._askGit({ read: hold.reviewed });
+			if (this._store.isDisposed || requestId !== this._holdRequestId) {
+				return;
+			}
+			if (!answer) {
+				this._applyHoldScheduler.schedule(); // git cannot be asked yet, or failed: nothing is known until it can
+				return;
+			}
+			text = answer.text;
+			if (text === undefined) {
+				if (hold.original !== undefined && hold.original !== hold.reviewed) {
+					// Git cleared away the version that was written for an approval. What was approved shows as a
+					// change again: the file is held against the version from before Claude Code staged it.
+					this._claudeRecordService.setHoldReviewed(this.model.uri, hold.original);
+				} else {
+					// Git does not have that version anymore. The file is taken as git has it, as it was before there were holds.
+					this._claudeRecordService.releaseHold(this.model.uri);
+				}
+				return;
+			}
+		}
+
+		const gitContents = this._gitContents;
+		if (text === undefined) {
+			// The reviewer never saw a version of the file: all of it is under review, as for a file that is new to git
+			if (this._baseline.value) {
+				this._clearBaseline();
+				this._gitContents = gitContents;
+			}
+		} else if (this._baseline.value) {
+			if (this._baseline.value.getValue() !== text) {
+				this._baseline.value.setValue(text);
+			}
+			this._diffVersions = undefined;
+		} else {
+			this._setBaseline(text, false);
+		}
+		this._isVirtual = false;
+		this._hasUnstagedOwnEdits = false;
+		this._isHoldApplied = true;
+		this._computeDiff();
+		this._onDidChange.fire();
+		this._checkHold();
+	}
+
+	private async _askGit(request: { readonly read?: string; readonly write?: string }): Promise<IBlobAnswer | undefined> {
+		try {
+			return await this._commandService.executeCommand<IBlobAnswer>('git.reviewedBlob', this.model.uri, request);
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Looks whether the file is still to be held under review, now that git has another staged version or the
+	 * reviewer agreed to more of the file.
+	 */
+	private async _checkHold(): Promise<void> {
+		const hold = this._hold;
+		if (!hold || !this._isHoldApplied) {
+			return;
+		}
+
+		const requestId = ++this._holdCheckId;
+		this._checkHoldScheduler.cancel();
+		this._isCheckingHold = true;
+		try {
+			const isOutdated = () => this._store.isDisposed || requestId !== this._holdCheckId || this._hold !== hold || !this._isHoldApplied;
+			const uri = this.model.uri;
+
+			const answer = await this._askGit({});
+			if (isOutdated()) {
+				return;
+			}
+			if (!answer) {
+				this._checkHoldScheduler.schedule(); // git cannot be asked yet, or failed
+				return;
+			}
+			const staged = answer.blob ?? null;
+			const reviewed = this._baseline.value?.getValue();
+
+			// What git has staged is asked of git itself: the staged version that is served here lags behind
+			let isReviewedStaged = staged === null || staged === hold.reviewed;
+			if (!isReviewedStaged && staged !== null && reviewed !== undefined) {
+				const stagedAnswer = await this._askGit({ read: staged });
+				if (isOutdated()) {
+					return;
+				}
+				if (!stagedAnswer) {
+					this._checkHoldScheduler.schedule();
+					return;
+				}
+				const stagedText = stagedAnswer.text;
+				if (stagedText !== undefined) {
+					this._gitContents = stagedText;
+					isReviewedStaged = withoutMarks(stagedText) === withoutMarks(reviewed);
+				}
+			}
+
+			// Git has the reviewed version staged, or no version at all anymore: there is nothing to hold. The
+			// file is under review as git lists it.
+			if (isReviewedStaged) {
+				if (staged !== null && reviewed !== undefined && this._expectedIndex === undefined) {
+					// The staged version that is served here may be an older one for a moment yet. It is waited
+					// for like one that was staged from here, or what was just agreed to would show again.
+					this._expectedIndex = reviewed;
+					this._isExpectedConfirmed = true;
+					this._giveUpExpectedIndex.schedule();
+					if (this._index && !this._index.isDisposed()) {
+						this._ownStagedHashes.push(hash(this._index.getValue()));
+					}
+				}
+				await this._claudeRecordService.releaseHold(uri);
+				return;
+			}
+
+			if (staged !== hold.staged) {
+				// Git has something else than Claude Code staged. A shell command of Claude Code that is still
+				// running may have staged it: then it says so when it ends.
+				const isCommandRunning = await this._claudeRecordService.settle(uri);
+				if (isOutdated()) {
+					return;
+				}
+				const current = this._claudeRecordService.getHold(uri);
+				if (current?.reviewed !== hold.reviewed || current.staged !== hold.staged) {
+					return; // what is stored for the file is not what it was, and is followed
+				}
+				if (isCommandRunning) {
+					this._checkHoldScheduler.schedule();
+					return;
+				}
+				// The reviewer staged the file in their own git tool, after Claude Code did. That counts as reviewed.
+				await this._claudeRecordService.releaseHold(uri);
+				return;
+			}
+
+			// Still held. Once the reviewer agreed to all there is in the file, that is staged, like any approval
+			if (reviewed !== undefined && reviewed === this.model.getValue() && this._expectedIndex === undefined && !this._textFileService.isDirty(uri)) {
+				this._sendToGit(reviewed);
+			}
+		} finally {
+			if (requestId === this._holdCheckId) {
+				this._isCheckingHold = false;
+			}
+		}
+	}
+
+	/**
+	 * Stores the reviewed version of a held file as a blob of its own. It is not staged: git has more staged than
+	 * the reviewer agreed to, and that would be taken out again.
+	 */
+	private _persistHold(): void {
+		const baseline = this._baseline.value;
+		if (!baseline || !this._hold) {
+			return;
+		}
+
+		this._persistNext = baseline.getValue();
+		if (!this._isPersisting) {
+			this._persist();
+		}
+	}
+
+	private async _persist(): Promise<void> {
+		this._isPersisting = true;
+		try {
+			while (this._persistNext !== undefined && this._hold) {
+				const contents = this._persistNext;
+				this._persistNext = undefined;
+
+				const blob = (await this._askGit({ write: contents }))?.blob;
+				if (this._store.isDisposed) {
+					return;
+				}
+				if (blob && this._hold) {
+					this._writtenBlobs.push(blob);
+					if (this._writtenBlobs.length > 16) {
+						this._writtenBlobs.shift();
+					}
+					await this._claudeRecordService.setHoldReviewed(this.model.uri, blob);
+				}
+			}
+		} finally {
+			this._isPersisting = false;
+		}
+		if (!this._store.isDisposed) {
+			this._checkHold();
 		}
 	}
 
@@ -501,7 +866,7 @@ export class ReviewedFile extends Disposable {
 	 * @returns `false` when the changes are about to be replaced by newly computed ones, and nothing was done
 	 */
 	approve(mappings: readonly LineRangeMapping[]): boolean {
-		const baseline = this._baseline.value;
+		const baseline = this.baseline;
 		if (!baseline || mappings.length === 0 || !this.isCurrent) {
 			return false;
 		}
@@ -513,7 +878,11 @@ export class ReviewedFile extends Disposable {
 			return { range: rangeMapping.originalRange, text: this.model.getValueInRange(rangeMapping.modifiedRange) };
 		}));
 
-		this._sendToGit(baseline.getValue());
+		if (this._hold) {
+			this._persistHold();
+		} else {
+			this._sendToGit(baseline.getValue());
+		}
 		this._computeDiff();
 		return true;
 	}
@@ -533,12 +902,25 @@ export class ReviewedFile extends Disposable {
 			this._isEnabled = isEnabled;
 			if (isEnabled) {
 				this._seenIndex = undefined;
+				this._syncHold();
 				this._onDidChangeIndex();
-				if (!this._baseline.value && this.model.getValueLength() === 0) {
+				if (!this._baseline.value && !this._hold && this.model.getValueLength() === 0) {
 					this._setBaseline('', true);
 				}
-			} else if (this._baseline.value) {
-				this._clearBaseline();
+			} else {
+				this._hold = undefined;
+				this._isHoldApplied = false;
+				this._holdRequestId++;
+				this._holdCheckId++;
+				this._isCheckingHold = false;
+				this._outsideIndexId++;
+				this._persistNext = undefined;
+				this._checkHoldScheduler.cancel();
+				this._applyHoldScheduler.cancel();
+				this._outsideIndexScheduler.cancel();
+				if (this._baseline.value) {
+					this._clearBaseline();
+				}
 			}
 			this._onDidChange.fire();
 			return;
@@ -552,6 +934,13 @@ export class ReviewedFile extends Disposable {
 	private _stageOwnEdits(): void {
 		const baseline = this._baseline.value;
 		if (!baseline || !this._hasUnstagedOwnEdits || this._expectedIndex !== undefined || !this._isEnabled || this._textFileService.isDirty(this.model.uri)) {
+			return;
+		}
+
+		if (this._hold) {
+			// What the reviewer wrote in a held file is theirs as well, and is kept with what they agreed to
+			this._hasUnstagedOwnEdits = false;
+			this._persistHold();
 			return;
 		}
 
@@ -609,12 +998,20 @@ export class ReviewedFile extends Disposable {
 						this._isExpectedConfirmed = true;
 						this._giveUpExpectedIndex.cancel();
 					}
+					this._noteOwnStaging();
 					continue;
 				}
 
 				// Not staged. What was approved or written here shows as a change again, against what git really has.
 				const baseline = this._baseline.value;
-				if (result && typeof result.actual === 'string' && baseline) {
+				if (this._hold) {
+					// Unless the file is held: what was agreed to is kept by itself then, and stays agreed to
+					this._expectedIndex = undefined;
+					this._isExpectedConfirmed = false;
+					this._stageNext = undefined;
+					this._giveUpExpectedIndex.cancel();
+					this._checkHoldScheduler.schedule();
+				} else if (result && typeof result.actual === 'string' && baseline) {
 					this._expectedIndex = undefined;
 					this._isExpectedConfirmed = false;
 					this._stageNext = undefined;
@@ -636,6 +1033,25 @@ export class ReviewedFile extends Disposable {
 			this._isStaging = false;
 		}
 	}
+
+	/**
+	 * Says what was staged here, for the script of Claude Code to tell it from what Claude Code staged: an approval
+	 * that is staged while a shell command of Claude Code runs is among what that command is seen to have changed.
+	 */
+	private async _noteOwnStaging(): Promise<void> {
+		if (this._claudeRecordService.connectionState !== ClaudeConnectionState.Connected) {
+			return;
+		}
+		const blob = (await this._askGit({}))?.blob;
+		if (blob && !this._store.isDisposed) {
+			await this._claudeRecordService.noteOwnStaging(this.model.uri, blob);
+		}
+	}
+}
+
+/** A text without what does not survive a text model unchanged: a byte order mark, and which line endings it has. */
+function withoutMarks(text: string): string {
+	return text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
 }
 
 function countLineBreaks(text: string): number {

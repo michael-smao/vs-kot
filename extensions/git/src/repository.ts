@@ -2673,6 +2673,15 @@ export class Repository implements Disposable {
 		return this.run(Operation.Show, () => this.repository.buffer(ref, filePath));
 	}
 
+	// vs-kot: see readBlob and writeBlob in git.ts. A blob that nothing refers to changes nothing git would list.
+	readBlob(object: string): Promise<Buffer> {
+		return this.run(Operation.Show, () => this.repository.readBlob(object));
+	}
+
+	writeBlob(data: Uint8Array): Promise<string> {
+		return this.run(Operation.Show, () => this.repository.writeBlob(data));
+	}
+
 	getObjectFiles(ref: string): Promise<LsTreeElement[]> {
 		return this.run(Operation.GetObjectFiles, () => this.repository.lstree(ref));
 	}

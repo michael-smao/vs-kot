@@ -9,7 +9,8 @@ import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../base/common/map.js';
-import { basename, isEqual } from '../../../../base/common/resources.js';
+import { Schemas } from '../../../../base/common/network.js';
+import { basename, isEqual, isEqualOrParent } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { isCodeEditor } from '../../../../editor/browser/editorBrowser.js';
 import { localize } from '../../../../nls.js';
@@ -21,6 +22,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ISCMRepository, ISCMResource, ISCMService } from '../../scm/common/scm.js';
 import { CHANGE_REVIEW_AUTO_REVEAL_SETTING, CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, CHANGE_REVIEW_ENABLED_SETTING, ChangeReviewFileKind, IChangeReviewEditor, IChangeReviewFile, IChangeReviewRequest, IChangeReviewService } from '../common/changeReview.js';
+import { ClaudeConnectionState, IClaudeRecordService } from '../common/claudeRecord.js';
 
 /** The git resource groups that hold changes which are not staged yet. */
 const UNSTAGED_GROUP_IDS = new Set(['workingTree', 'untracked']);
@@ -76,6 +78,15 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 	private readonly _unlistedRepositories = new Set<ISCMRepository>();
 	private _isFirstListing = false;
 
+	/**
+	 * The files that are under review although git does not list them as changed: Claude Code staged or committed
+	 * their changes, and the reviewer did not. See ../common/claudeRecord.ts.
+	 */
+	private _heldFiles: IChangeReviewFile[] = [];
+	private _heldFilesRequestId = 0;
+	private _areHeldFilesListed = false;
+	private readonly _updateHeldFilesScheduler = this._register(new RunOnceScheduler(() => this._updateHeldFiles(), 50));
+
 	private readonly _repositoryListeners = this._register(new DisposableMap<ISCMRepository>());
 	private readonly _updateFilesScheduler = this._register(new RunOnceScheduler(() => this._updateFiles(), 100));
 	private readonly _autoRevealScheduler = this._register(new RunOnceScheduler(() => this._revealIfIdle(), 300));
@@ -89,6 +100,7 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		@IFileService private readonly _fileService: IFileService,
 		@INotificationService private readonly _notificationService: INotificationService,
 		@ICommandService private readonly _commandService: ICommandService,
+		@IClaudeRecordService private readonly _claudeRecordService: IClaudeRecordService,
 	) {
 		super();
 
@@ -96,7 +108,10 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		this._register(this._scmService.onDidRemoveRepository(repository => {
 			this._repositoryListeners.deleteAndDispose(repository);
 			this._updateFilesScheduler.schedule();
+			this._updateHeldFilesScheduler.schedule();
 		}));
+		this._register(this._claudeRecordService.onDidChangeHolds(() => this._updateHeldFilesScheduler.schedule()));
+		this._claudeRecordService.whenHoldsKnown.then(() => this._updateHeldFilesScheduler.schedule());
 		for (const repository of this._scmService.repositories) {
 			this._onDidAddRepository(repository);
 		}
@@ -127,6 +142,10 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 			if (affected) {
 				this._onDidChange.fire();
 				this._autoRevealScheduler.schedule();
+			}
+			// A held file that is deleted, or back, is listed as something else
+			if (this._claudeRecordService.holds.some(hold => e.contains(URI.file(hold.path), FileChangeType.ADDED, FileChangeType.DELETED))) {
+				this._updateHeldFilesScheduler.schedule();
 			}
 		}));
 	}
@@ -179,6 +198,45 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		store.add(toDisposable(() => this._unlistedRepositories.delete(repository)));
 		this._repositoryListeners.set(repository, store);
 
+		// Claude Code is asked to note what it stages in this repository
+		if (repository.provider.rootUri) {
+			this._claudeRecordService.registerRepository(repository.provider.rootUri);
+		}
+
+		this._updateFilesScheduler.schedule();
+		this._updateHeldFilesScheduler.schedule();
+	}
+
+	/** Finds out what the files are that are held under review: changed, new or deleted. */
+	private async _updateHeldFiles(): Promise<void> {
+		const requestId = ++this._heldFilesRequestId;
+		const roots = [...this._repositoryListeners.keys()].map(repository => repository.provider.rootUri).filter(root => !!root);
+
+		const files: IChangeReviewFile[] = [];
+		for (const hold of this._claudeRecordService.holds) {
+			const uri = URI.file(hold.path);
+			if (!roots.some(root => isEqualOrParent(uri, root))) {
+				continue; // in a repository that is not open in this window
+			}
+
+			if (await this._fileService.exists(uri)) {
+				// A file the reviewer never saw a version of is new to them, whatever it is to git by now
+				files.push({ uri, editorUri: uri, kind: hold.reviewed === null ? ChangeReviewFileKind.Added : ChangeReviewFileKind.Modified });
+			} else if (hold.reviewed !== null && hold.headBefore !== null) {
+				// The editor shows what is gone: the file as the commit has it that Claude Code started from
+				const editorUri = uri.with({ scheme: 'git', query: JSON.stringify({ path: uri.fsPath, ref: hold.headBefore }) });
+				files.push({ uri, editorUri, kind: ChangeReviewFileKind.Deleted });
+			}
+		}
+
+		if (this._store.isDisposed || requestId !== this._heldFilesRequestId) {
+			return;
+		}
+		this._heldFiles = files;
+		if (!this._areHeldFilesListed && roots.length > 0) {
+			this._areHeldFilesListed = true;
+			this._isFirstListing = true; // what was held when the window opened was there before
+		}
 		this._updateFilesScheduler.schedule();
 	}
 
@@ -203,6 +261,19 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 						files.push(file);
 					}
 				}
+			}
+		}
+
+		// And the files that Claude Code staged or committed without a review. Git does not list those as changed
+		// anymore, or lists them for what was changed since.
+		for (const held of this._heldFiles) {
+			const index = files.findIndex(file => isEqual(file.uri, held.uri));
+			if (index === -1) {
+				filesByEditorUri.set(held.editorUri, held);
+				files.push(held);
+			} else if (held.kind === ChangeReviewFileKind.Added && files[index].kind === ChangeReviewFileKind.Modified) {
+				filesByEditorUri.set(held.editorUri, held);
+				files[index] = held;
 			}
 		}
 
@@ -401,6 +472,23 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		}
 	}
 
+	async approveWholeFile(editorUri: URI): Promise<void> {
+		const uri = this.getFile(editorUri)?.uri ?? editorUri;
+		await this._commandService.executeCommand('git.stageFile', editorUri);
+
+		if (uri.scheme === Schemas.file) {
+			// The file may be one that Claude Code staged already: then git had nothing to stage, and the approval
+			// is that it is not held under review anymore
+			if (this._claudeRecordService.connectionState === ClaudeConnectionState.Connected) {
+				const staged = await this._commandService.executeCommand<{ readonly blob?: string }>('git.reviewedBlob', uri, {});
+				if (staged?.blob) {
+					await this._claudeRecordService.noteOwnStaging(uri, staged.blob);
+				}
+			}
+			await this._claudeRecordService.releaseHold(uri);
+		}
+	}
+
 	/** A file that has no text editor (an image, a binary) can only be approved as a whole. */
 	private _offerFileApproval(file: IChangeReviewFile): void {
 		this._notificationService.prompt(
@@ -409,7 +497,7 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 			[{
 				label: localize('approveFileChoice', "Approve File"),
 				run: async () => {
-					await this._commandService.executeCommand('git.stageFile', file.editorUri);
+					await this.approveWholeFile(file.editorUri);
 					await this.revealNextFile(file.uri);
 				}
 			}, {

@@ -28,7 +28,6 @@ import { ModelDecorationOptions } from '../../../../editor/common/model/textMode
 import { InlineDecoration, InlineDecorationType } from '../../../../editor/common/viewModel/inlineDecorations.js';
 import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
-import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
@@ -168,7 +167,6 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		@IChangeReviewService private readonly _service: IChangeReviewService,
 		@IChangeReviewFilesService private readonly _filesService: IChangeReviewFilesService,
 		@IEditorService private readonly _editorService: IEditorService,
-		@ICommandService private readonly _commandService: ICommandService,
 		@IClipboardService private readonly _clipboardService: IClipboardService,
 		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 		@INotificationService private readonly _notificationService: INotificationService,
@@ -1005,7 +1003,7 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 		const fileUri = this._getFileUri(model);
 
 		if (hunk.wholeFile !== undefined) {
-			await this._commandService.executeCommand('git.stageFile', model.uri);
+			await this._service.approveWholeFile(model.uri);
 			this._service.removeRequest(fileUri, hunk.key);
 			this._service.setPendingCount(fileUri, 0);
 			await this._service.revealNextFile(fileUri);

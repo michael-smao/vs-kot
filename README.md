@@ -35,6 +35,8 @@ A change that is not staged in git counts as not reviewed. vs-kot shows every su
 
 A floating bar moves between changes (`F7`, `⇧F7`) and between files (`⌥F7`, `⇧⌥F7`) and approves a whole file (`⇧⌘Y`). When a file has nothing left to review, the editor jumps to the next changed file. When nothing is left at all, everything is staged and you commit as usual.
 
+Staged means reviewed only when you staged it. An agent stages and commits too, and nobody looked at what it staged. Once Claude Code is connected (**Connect Claude Code** in the status bar, which asks before it adds its hooks to `~/.claude/settings.json`), the review marks the changes that Claude Code made, and a change that Claude Code staged or committed stays under review until you approve it. Staging a file yourself, in the editor or in your own git tool, counts as reviewed as before. What the hooks note stays on your computer.
+
 The settings `changeReview.enabled` and `changeReview.autoReveal` switch the review, and the automatic jump to new changes, on and off.
 
 ### No assistant in the editor

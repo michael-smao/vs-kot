@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 // vs-kot: change review. Unstaged changes are shown inline in the editor and reviewed one by one.
-// Approving a change stages it in git, so "unstaged" always means "not reviewed yet".
+// Approving a change stages it in git, so "unstaged" always means "not reviewed yet". What Claude Code staged
+// or committed is not reviewed by that: such a file stays under review until the reviewer approved it.
 
 import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -73,7 +74,7 @@ export interface IChangeReviewService {
 	readonly enabled: boolean;
 	readonly autoReveal: boolean;
 
-	/** All files with unstaged changes. */
+	/** All files with unstaged changes, and those whose changes Claude Code staged or committed without a review. */
 	readonly files: readonly IChangeReviewFile[];
 	/** The files that still have changes which are neither approved nor flagged. */
 	readonly pendingFiles: readonly IChangeReviewFile[];
@@ -98,6 +99,13 @@ export interface IChangeReviewService {
 
 	/** Editors report how many changes of a file are still neither approved nor flagged. */
 	setPendingCount(uri: URI, count: number): void;
+
+	/**
+	 * Approves a file as a whole: one that is new or deleted, or whose changes cannot be shown as text. It is staged
+	 * in git. Where Claude Code staged it already, the approval is that it is not held under review anymore.
+	 * @param editorUri what an editor shows for the file
+	 */
+	approveWholeFile(editorUri: URI): Promise<void>;
 
 	/**
 	 * The reviewer wrote in a file themselves. Someone who is writing is not taken to another file
