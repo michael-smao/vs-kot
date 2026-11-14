@@ -24,6 +24,24 @@ suite('ClaudeRecord', () => {
 		);
 	});
 
+	test('an edit to a part of a line is the whole line, where the tool says which lines it changed', () => {
+		// the way Claude Code answers: the lines around the change, the ones it took away and the ones it wrote
+		const structuredPatch = [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' function greet(name) {', '-\treturn "Hello " + name;', '+\treturn "Hi " + name;', ' }'] }];
+		const part = { file_path: '/repo/a.ts', old_string: '"Hello "', new_string: '"Hi "' };
+		assert.deepStrictEqual({
+			edit: digest('Edit', part, { filePath: '/repo/a.ts', oldString: '"Hello "', newString: '"Hi "', structuredPatch }),
+			severalEdits: digest('MultiEdit', { file_path: '/repo/a.ts', edits: [part] }, { structuredPatch }),
+			// what the tool was asked is all there is to go by then: the part, which is no line of the file
+			withoutAnAnswer: digest('Edit', part),
+			withAnAnswerThatSaysNothing: digest('Edit', part, { structuredPatch: [] }),
+		}, {
+			edit: [entry('/repo/a.ts', 'Edit', { added: h('return "Hi " + name;'), removed: h('return "Hello " + name;') })],
+			severalEdits: [entry('/repo/a.ts', 'MultiEdit', { added: h('return "Hi " + name;'), removed: h('return "Hello " + name;') })],
+			withoutAnAnswer: [entry('/repo/a.ts', 'Edit', { added: h('"Hi "'), removed: h('"Hello "') })],
+			withAnAnswerThatSaysNothing: [entry('/repo/a.ts', 'Edit', { added: h('"Hi "'), removed: h('"Hello "') })],
+		});
+	});
+
 	test('a written file is all its lines when it is new, and what the tool says it changed when it was there', () => {
 		assert.deepStrictEqual({
 			created: digest('Write', { file_path: '/repo/new.ts', content: 'export const a = 1;\n\nexport const b = 2;\n' }, { type: 'create', filePath: '/repo/new.ts', structuredPatch: [], originalFile: null }),

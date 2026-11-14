@@ -158,7 +158,9 @@ export function digestClaudeHookInput(input: unknown, time: number): IClaudeReco
 			const edits = tool === 'MultiEdit' ? asArray(toolInput?.edits).map(asObject) : [toolInput];
 			const oldLines = edits.flatMap(edit => splitLines(asString(edit?.old_string) ?? ''));
 			const newLines = edits.flatMap(edit => splitLines(asString(edit?.new_string) ?? ''));
-			return [toEntry(path, getReplacement(oldLines, newLines))];
+			// The tool is asked to replace a text, and that is often a part of a line. A change is known again by
+			// its whole lines: those are in what the tool answered, where it says which lines it changed.
+			return [toEntry(path, getPatchChanges(toolResponse?.structuredPatch) ?? getReplacement(oldLines, newLines))];
 		}
 		case 'Write': {
 			const path = asString(toolInput?.file_path);

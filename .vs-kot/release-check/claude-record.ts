@@ -37,7 +37,7 @@ fs.writeFileSync(file('a.ts'), A); fs.writeFileSync(file('b.ts'), B);
 // one file per check of what Claude Code staged or committed: each says hello and goodbye in its own words. No
 // name is the end of another one: the files are opened by typing their name, and the first match is taken.
 const greeting = (word: string) => `export function hello(name: string): string {\n    return "${word} hello " + name;\n}\n\nexport const version = 1;\n\nexport function bye(name: string): string {\n    return "${word} bye " + name;\n}\n`;
-for (const name of ['staged', 'committed', 'outside', 'during', 'branch', 'gone']) { fs.writeFileSync(file(`${name}.ts`), greeting(name)); }
+for (const name of ['staged', 'committed', 'outside', 'during', 'branch', 'gone', 'part']) { fs.writeFileSync(file(`${name}.ts`), greeting(name)); }
 const commit = ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q'];
 git('init', '-q', '.'); git('add', '.'); git(...commit, '-m', 'init');
 // another branch, on which one file is not what it is here
@@ -173,6 +173,16 @@ const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync
 			fs.writeFileSync(file(name), read(name).replace(oldString, newString));
 			runHooks('Edit', { file_path: file(name), old_string: oldString, new_string: newString, replace_all: false }, { filePath: file(name), oldString, newString });
 		};
+
+		// 9b. Claude Code replaces a part of a line, and answers the way it does: with the lines of the file it changed
+		const before = read('part.ts');
+		fs.writeFileSync(file('part.ts'), before.replace('"part hello "', '"part hi "'));
+		runHooks('Edit', { file_path: file('part.ts'), old_string: '"part hello "', new_string: '"part hi "', replace_all: false }, {
+			filePath: file('part.ts'), oldString: '"part hello "', newString: '"part hi "', originalFile: before, userModified: false, replaceAll: false,
+			structuredPatch: [{ oldStart: 1, oldLines: 4, newStart: 1, newLines: 4, lines: [' export function hello(name: string): string {', '-    return "part hello " + name;', '+    return "part hi " + name;', ' }', ' '] }]
+		});
+		await settle(); await open('part.ts'); await settle();
+		check('a change by which Claude Code replaced a part of a line is marked', await origins() === 'Claude', `changes: ${await origins() || 'nothing'}`);
 
 		// 10a. Claude Code changes a file and stages it
 		claudeEdits('staged.ts', '"staged hello " + name', '"staged hi " + name');
