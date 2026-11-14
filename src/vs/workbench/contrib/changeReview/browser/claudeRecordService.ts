@@ -43,7 +43,7 @@ import { ILabelService } from '../../../../platform/label/common/label.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
-import { addClaudeHooks, applyClaudeStaging, CLAUDE_HOOK_SCRIPT, CLAUDE_RECORD_FOLDER_SETTING, CLAUDE_SETTINGS_FILE_SETTING, ClaudeConnectionState, ClaudeHooks, ClaudeSettingsError, digestClaudeHookInput, getClaudeHooks, getClaudeStagings, IClaudeHold, IClaudeLastHeard, IClaudeRecordEntry, IClaudeRecordService, IClaudeStaging, IOwnStaging, isCurrentClaudeHookScript, parseClaudeGitEvent, parseClaudeHold, parseClaudeRecordEntry, parseOwnStaging, removeClaudeHooks } from '../common/claudeRecord.js';
+import { addClaudeHooks, applyClaudeStaging, CLAUDE_HOOK_SCRIPT, CLAUDE_RECORD_FOLDER_SETTING, CLAUDE_SETTINGS_FILE_SETTING, ClaudeConnectionState, ClaudeHooks, ClaudeSettingsError, digestClaudeGoneEvent, digestClaudeHookInput, getClaudeHooks, getClaudeStagings, IClaudeHold, IClaudeLastHeard, IClaudeRecordEntry, IClaudeRecordService, IClaudeStaging, IOwnStaging, isCurrentClaudeHookScript, parseClaudeGitEvent, parseClaudeHold, parseClaudeRecordEntry, parseOwnStaging, removeClaudeHooks } from '../common/claudeRecord.js';
 
 /** How long an event is kept after the script stored it. Every open window reads it within a moment. */
 const EVENT_KEPT_MS = 10 * 60 * 1000;
@@ -62,6 +62,9 @@ const SNAPSHOT_KEPT_MS = 15 * 60 * 1000;
 // Only what has one of these names is ever deleted, wherever a setting points the folder of the record
 const EVENT_NAME = /^\d+-\d+\.json$/;
 const GIT_EVENT_NAME = /^\d+-\d+-\d+\.git$/;
+const GONE_EVENT_NAME = /^\d+-\d+-\d+\.gone$/;
+/** An entry is named after the event it came from. */
+const ENTRY_NAME = /^\d+-\d+(-\d+)?\.json$/;
 const UNFINISHED_EVENT_NAME = /^\.\d+\.tmp$/;
 const ENTRIES_FOLDER_NAME = /^[0-9a-f]{40}$/;
 const HASHED_NAME = /^[0-9a-f]{40}(\.json)?$/;
@@ -347,7 +350,8 @@ export class ClaudeRecordService extends Disposable implements IClaudeRecordServ
 
 			const isOld = now - child.mtime > EVENT_KEPT_MS;
 			const isGitEvent = GIT_EVENT_NAME.test(child.name);
-			if (!isGitEvent && !EVENT_NAME.test(child.name)) {
+			const isGoneEvent = GONE_EVENT_NAME.test(child.name);
+			if (!isGitEvent && !isGoneEvent && !EVENT_NAME.test(child.name)) {
 				if (isOld && UNFINISHED_EVENT_NAME.test(child.name)) {
 					await this._deleteQuietly(child.resource); // a run of the script that was stopped half way
 				}
@@ -359,6 +363,8 @@ export class ClaudeRecordService extends Disposable implements IClaudeRecordServ
 				this._readEvents.add(child.name);
 				if (isGitEvent) {
 					await this._digestGitEvent(child.resource, child.name, child.size);
+				} else if (isGoneEvent) {
+					await this._digestGoneEvent(child.resource, child.name, child.mtime, child.size);
 				} else {
 					await this._digestEvent(child.resource, child.name, child.mtime, child.size);
 				}
@@ -389,6 +395,30 @@ export class ClaudeRecordService extends Disposable implements IClaudeRecordServ
 			return; // not what Claude Code hands to a hook, or taken away by another window meanwhile
 		}
 
+		await this._storeEntries(entries, name);
+	}
+
+	/** Writes the entries for the files that a shell command of Claude Code deleted. */
+	private async _digestGoneEvent(resource: URI, name: string, time: number, size: number): Promise<void> {
+		if (size > MAX_EVENT_SIZE) {
+			return;
+		}
+
+		let entries: IClaudeRecordEntry[];
+		try {
+			entries = digestClaudeGoneEvent((await this._fileService.readFile(resource)).value.toString(), time);
+		} catch {
+			return; // taken away by another window meanwhile
+		}
+
+		await this._storeEntries(entries, name.replace(/\.gone$/, '.json'));
+	}
+
+	/**
+	 * Stores entries under a name, and adds them to what is known for the files that were asked about.
+	 * @param name the name of the entry in the folder of each file. Every window writes the same one for an event.
+	 */
+	private async _storeEntries(entries: readonly IClaudeRecordEntry[], name: string): Promise<void> {
 		for (const entry of entries) {
 			try {
 				await this._fileService.createFile(joinPath(this._getEntriesFolder(entry.path), name), VSBuffer.fromString(JSON.stringify(entry)), { overwrite: false });
@@ -445,7 +475,7 @@ export class ClaudeRecordService extends Disposable implements IClaudeRecordServ
 			const stat = await this._fileService.resolve(this._getEntriesFolder(path), { resolveMetadata: true });
 			const now = Date.now();
 			await Promise.all((stat.children ?? []).map(async child => {
-				if (child.isDirectory || !EVENT_NAME.test(child.name)) {
+				if (child.isDirectory || !ENTRY_NAME.test(child.name)) {
 					return;
 				}
 				if (now - child.mtime > ENTRY_KEPT_MS) {

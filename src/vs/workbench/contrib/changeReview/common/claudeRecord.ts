@@ -44,6 +44,8 @@ export interface IClaudeRecordEntry {
 	readonly removed: readonly number[];
 	/** Set when the file is known to have been changed, but not in which lines. */
 	readonly isWithoutLines?: boolean;
+	/** Set when the tool call took the file away: it was there before a shell command and missing after it. */
+	readonly isDeletion?: boolean;
 }
 
 type JsonObject = { readonly [key: string]: unknown };
@@ -224,7 +226,8 @@ export function parseClaudeRecordEntry(text: string): IClaudeRecordEntry | undef
 		tool: asString(value.tool) ?? '',
 		added: toHashes(value.added),
 		removed: toHashes(value.removed),
-		...(value.isWithoutLines === true ? { isWithoutLines: true } : {})
+		...(value.isWithoutLines === true ? { isWithoutLines: true } : {}),
+		...(value.isDeletion === true ? { isDeletion: true } : {})
 	};
 }
 
@@ -277,6 +280,75 @@ export function findClaudeEntry(entries: readonly IClaudeRecordEntry[], addedLin
 		}
 	}
 	return latest;
+}
+
+// --- files that Claude Code deleted
+//
+// A shell command of Claude Code that deletes a file says so only for a file that Claude Code read before, and
+// a file is seldom read before it is deleted. So the script lists the files that git knows and that are missing,
+// before a shell command that has a word for taking files away, and compares after it.
+
+/** How many deleted files the script reports for one shell command. One that clears a whole folder is cut short. */
+const MAX_GONE_FILES = 500;
+
+/**
+ * Reads what the script stored about the files that went missing during a shell command of Claude Code, as one
+ * entry per file. See {@link CLAUDE_HOOK_SCRIPT} for how it is written.
+ * @param time when the shell command was done
+ */
+export function digestClaudeGoneEvent(text: string, time: number): IClaudeRecordEntry[] {
+	const lines = splitLines(text);
+	const listStart = lines.indexOf('[gone]');
+	if (lines[0] !== 'vs-kot gone 1' || listStart === -1) {
+		return [];
+	}
+
+	const values = new Map<string, string>();
+	for (const line of lines.slice(1, listStart)) {
+		const separator = line.indexOf(' ');
+		values.set(separator === -1 ? line : line.substring(0, separator), separator === -1 ? '' : line.substring(separator + 1));
+	}
+
+	const repository = values.get('top');
+	if (!repository) {
+		return [];
+	}
+
+	const paths = new Set(lines.slice(listStart + 1).filter(line => line.length > 0).slice(0, MAX_GONE_FILES).map(unquoteGitPath));
+	return [...paths].map(path => ({
+		path: join(repository, path),
+		time,
+		session: values.get('session') ?? '',
+		tool: 'Bash',
+		added: [],
+		removed: [],
+		isDeletion: true
+	}));
+}
+
+/**
+ * Says whether Claude Code deleted a file that is gone, where {@link findClaudeEntry} cannot say so by its lines.
+ *
+ * It did when the last thing on record for the file is that a shell command of Claude Code took it away, or when
+ * Claude Code removed it from git. A file that was brought back since and deleted again by someone else is still
+ * taken for Claude's: bringing a file back leaves nothing on record.
+ * @param entries what is on record for the file, in any order
+ * @param hold what is stored for the file when it is held under review
+ */
+export function findClaudeDeletion(entries: readonly IClaudeRecordEntry[], hold: IClaudeHold | undefined): IClaudeRecordEntry | undefined {
+	let latest: IClaudeRecordEntry | undefined;
+	for (const entry of entries) {
+		if (!latest || entry.time > latest.time || (entry.time === latest.time && entry.isDeletion)) {
+			latest = entry;
+		}
+	}
+	if (latest?.isDeletion) {
+		return latest;
+	}
+
+	return hold && hold.released === undefined && hold.staged === null
+		? { path: hold.path, time: hold.time, session: hold.session, tool: 'Bash', added: [], removed: [], isDeletion: true }
+		: undefined;
 }
 
 // --- what Claude Code staged or committed
@@ -597,14 +669,14 @@ export function parseOwnStaging(text: string): IOwnStaging | undefined {
 const HOOK_MARKER = '# vs-kot change review';
 
 /** Raised with every change to {@link CLAUDE_HOOK_SCRIPT}. */
-const HOOK_VERSION = 2;
+const HOOK_VERSION = 3;
 /**
  * How many tool calls the script keeps for an editor to read. An editor that is open takes them away as they come.
  * The limit is for a computer on which Claude Code is connected and this editor is not used anymore: what the
  * script keeps holds whole files, and must not pile up there without end.
  */
 const MAX_WAITING_EVENTS = 2000;
-/** The same for what the script keeps about staging. That is small, and there is little of it. */
+/** The same for what the script keeps about staging and about deleted files. That is small, and there is little of it. */
 const MAX_WAITING_GIT_EVENTS = 500;
 /** How many repositories the script looks at for one shell command. */
 const MAX_REPOSITORIES = 8;
@@ -635,10 +707,13 @@ export function isCurrentClaudeHookScript(stored: string | undefined): boolean {
  * `commits` when the commits were made that are new to the history. Then come three lists: `[unstaged]` the files
  * that differ from their staged version, `[staged]` the files whose staged version differs from the commit, and
  * `[index]` the entries of staged files that are not what they were, `<` as before and `>` as after.
+ *
+ * What it stores about deleted files is text of the same kind: `top` and `session`, and then the list
+ * `[gone]` of the files that git knows and that are missing after the command and were not before it.
  */
 export const CLAUDE_HOOK_SCRIPT = [
 	'#!/bin/sh',
-	`# vs-kot change review, hook version ${HOOK_VERSION}: notes which files Claude Code changed, and what it staged or committed.`,
+	`# vs-kot change review, hook version ${HOOK_VERSION}: notes which files Claude Code changed or deleted, and what it staged or committed.`,
 	'#',
 	'# Claude Code runs this before each of its shell commands and after each of its edits and shell commands (see',
 	'# "hooks" in its settings.json) and hands over what the tool does. That is kept next to this script for vs-kot',
@@ -655,11 +730,15 @@ export const CLAUDE_HOOK_SCRIPT = [
 	'git_in() { top=$1; shift; GIT_OPTIONAL_LOCKS=0 git -c core.quotePath=false -C "$top" "$@"; }',
 	'',
 	'if [ "$kind" = before ]; then',
-	'\t# Before a shell command, the staged version of every file is noted, to see after it what the command staged.',
-	'\t# Only a command that names git and one of its words for changing what is staged can do that, and only the',
-	'\t# repositories that are open in vs-kot matter. Most commands end here.',
-	`\tcase $input in *'"command"'*git*) ;; *) exit 0 ;; esac`,
-	`\tcase $input in *add*|*commit*|*stage*|*' rm '*|*' mv '*|*apply*|*' am '*|*merge*|*rebase*|*cherry-pick*|*revert*|*reset*|*restore*|*stash*|*checkout*|*switch*|*pull*|*update-index*) ;; *) exit 0 ;; esac`,
+	'\t# Before a shell command, two things are noted, to see after it what the command did: the staged version of',
+	'\t# every file, for a command that names git and one of its words for changing what is staged, and the files',
+	'\t# that are missing, for a command with a word for taking files away. Only the repositories that are open in',
+	'\t# vs-kot matter. Most commands end here.',
+	'\tstage=',
+	'\tgone=',
+	`\tcase $input in *'"command"'*git*) case $input in *add*|*commit*|*stage*|*' rm '*|*' mv '*|*apply*|*' am '*|*merge*|*rebase*|*cherry-pick*|*revert*|*reset*|*restore*|*stash*|*checkout*|*switch*|*pull*|*update-index*) stage=1 ;; esac ;; esac`,
+	`\tcase $input in *[!A-Za-z]rm[!A-Za-z]*|*[!A-Za-z]mv[!A-Za-z]*|*unlink*|*-delete*|*trash*|*[Rr]emove*|*rmSync*|*rimraf*|*rmtree*) gone=1 ;; esac`,
+	'\t[ -n "$stage$gone" ] || exit 0',
 	'\tset -- "$dir"/repos/*',
 	'\t[ -f "$1" ] || exit 0',
 	'\tid=$(field tool_use_id)',
@@ -683,8 +762,20 @@ export const CLAUDE_HOOK_SCRIPT = [
 	'\t\tcase $input in *"$top"*) ;; *) [ -z "$named" ] || continue; case $top/ in "$cwd"/*) ;; *) continue ;; esac ;; esac',
 	'\t\tn=$((n + 1))',
 	`\t\t[ "$n" -le ${MAX_REPOSITORIES} ] || break`,
-	'\t\tgit_in "$top" ls-files -s > "$snap/$n.before" 2>/dev/null || { rm -f "$snap/$n.before"; continue; }',
-	`\t\t{ printf '%s\\n' "$top"; git_in "$top" rev-parse -q --verify HEAD 2>/dev/null; } > "$snap/$n.repo"`,
+	'\t\tif [ -n "$stage" ]; then',
+	'\t\t\tif git_in "$top" ls-files -s > "$snap/$n.before" 2>/dev/null; then',
+	`\t\t\t\t{ printf '%s\\n' "$top"; git_in "$top" rev-parse -q --verify HEAD 2>/dev/null; } > "$snap/$n.repo"`,
+	'\t\t\telse',
+	'\t\t\t\trm -f "$snap/$n.before"',
+	'\t\t\tfi',
+	'\t\tfi',
+	'\t\tif [ -n "$gone" ]; then',
+	'\t\t\tif git_in "$top" ls-files -d > "$snap/$n.missing" 2>/dev/null; then',
+	`\t\t\t\tprintf '%s\\n' "$top" > "$snap/$n.tree"`,
+	'\t\t\telse',
+	'\t\t\t\trm -f "$snap/$n.missing"',
+	'\t\t\tfi',
+	'\t\tfi',
 	'\tdone',
 	'\t[ "$n" -gt 0 ] || rm -rf "$snap"',
 	'\texit 0',
@@ -697,7 +788,7 @@ export const CLAUDE_HOOK_SCRIPT = [
 	`\t\tcase $id in ''|*[!A-Za-z0-9_-]*) id=none ;; esac`,
 	'\t\tsnap="$dir/pending/$id"',
 	'\t\tif [ -d "$snap" ] && mkdir -p "$dir/events" 2>/dev/null; then',
-	'\t\t\t# After the shell command: what is staged now, for every repository in which that is not what it was',
+	'\t\t\t# After the shell command: what is staged now, for every repository in which that is not what it was,',
 	'\t\t\tsession=$(field session_id)',
 	'\t\t\tIFS= read -r started < "$snap/time"',
 	'\t\t\tfor meta in "$snap"/*.repo; do',
@@ -720,6 +811,23 @@ export const CLAUDE_HOOK_SCRIPT = [
 	`\t\t\t\t\tdiff "$base.before" "$base.after" | grep '^[<>]'`,
 	'\t\t\t\t} > "$base.event" 2>/dev/null',
 	'\t\t\t\tmv "$base.event" "$dir/events/$(date +%s)-$$-${base##*/}.git" 2>/dev/null',
+	'\t\t\tdone',
+	'\t\t\t# and the files that are missing now and were not before it',
+	'\t\t\tfor meta in "$snap"/*.tree; do',
+	'\t\t\t\t[ -f "$meta" ] || continue',
+	'\t\t\t\tbase=${meta%.tree}',
+	'\t\t\t\tIFS= read -r top < "$meta"',
+	'\t\t\t\tgit_in "$top" ls-files -d > "$base.now" 2>/dev/null || continue',
+	'\t\t\t\tcmp -s "$base.missing" "$base.now" && continue',
+	`\t\t\t\tdiff "$base.missing" "$base.now" | sed -n 's/^> //p' | sed -n '1,${MAX_GONE_FILES}p' > "$base.new" 2>/dev/null`,
+	'\t\t\t\t[ -s "$base.new" ] || continue',
+	'\t\t\t\tset -- "$dir"/events/*.gone',
+	`\t\t\t\t[ $# -lt ${MAX_WAITING_GIT_EVENTS} ] || break`,
+	'\t\t\t\t{',
+	`\t\t\t\t\tprintf '%s\\n' 'vs-kot gone 1' "top $top" "session $session" '[gone]'`,
+	'\t\t\t\t\tcat "$base.new"',
+	'\t\t\t\t} > "$base.event" 2>/dev/null',
+	'\t\t\t\tmv "$base.event" "$dir/events/$(date +%s)-$$-${base##*/}.gone" 2>/dev/null',
 	'\t\t\tdone',
 	'\t\t\trm -rf "$snap"',
 	'\t\tfi',

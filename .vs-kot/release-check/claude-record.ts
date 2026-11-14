@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// vs-kot: does the review know which changes Claude Code made, and does it keep under review what Claude Code
-// staged or committed? Connects a stand-in for the settings of Claude Code, plays the part of Claude Code by
+// vs-kot: does the review know which changes Claude Code made and which files it deleted, and does it keep under
+// review what Claude Code staged or committed? Connects a stand-in for the settings of Claude Code, plays the part of Claude Code by
 // running the hooks the way it runs them, and looks at what the review shows.
 // Neither the real settings of Claude Code nor the real record are touched: both are set to folders of this check.
 //
@@ -37,7 +37,7 @@ fs.writeFileSync(file('a.ts'), A); fs.writeFileSync(file('b.ts'), B);
 // one file per check of what Claude Code staged or committed: each says hello and goodbye in its own words. No
 // name is the end of another one: the files are opened by typing their name, and the first match is taken.
 const greeting = (word: string) => `export function hello(name: string): string {\n    return "${word} hello " + name;\n}\n\nexport const version = 1;\n\nexport function bye(name: string): string {\n    return "${word} bye " + name;\n}\n`;
-for (const name of ['staged', 'committed', 'outside', 'during', 'branch', 'gone', 'part']) { fs.writeFileSync(file(`${name}.ts`), greeting(name)); }
+for (const name of ['staged', 'committed', 'outside', 'during', 'branch', 'gone', 'part', 'erased', 'dropped']) { fs.writeFileSync(file(`${name}.ts`), greeting(name)); }
 const commit = ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q'];
 git('init', '-q', '.'); git('add', '.'); git(...commit, '-m', 'init');
 // another branch, on which one file is not what it is here
@@ -86,6 +86,8 @@ const asClaude = '-c user.name=claude -c user.email=claude@example.com';
 const held = () => fs.existsSync(path.join(record, 'held')) ? fs.readdirSync(path.join(record, 'held')).map(name => JSON.parse(fs.readFileSync(path.join(record, 'held', name), 'utf8'))).filter(hold => hold.released === undefined).map(hold => path.basename(hold.path)).sort().join(' ') : '';
 const stagedFiles = () => git('diff', '--cached', '--name-only').split('\n').filter(Boolean).map(name => path.basename(name)).sort().join(' ');
 const events = () => fs.existsSync(path.join(record, 'events')) ? fs.readdirSync(path.join(record, 'events')).filter(name => name.endsWith('.json')).length : 0;
+/** The files of which the record says that a shell command of Claude Code took them away. */
+const deletions = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync(path.join(record, 'files')).flatMap(folder => fs.readdirSync(path.join(record, 'files', folder)).map(name => JSON.parse(fs.readFileSync(path.join(record, 'files', folder, name), 'utf8')))).filter(entry => entry.isDeletion).map(entry => `${path.basename(entry.path)} ${entry.added.length + entry.removed.length}`).sort().join(', ') : '';
 const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync(path.join(record, 'files')).flatMap(folder => fs.readdirSync(path.join(record, 'files', folder))).length : 0;
 
 (async () => {
@@ -101,6 +103,8 @@ const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync
 		const origins = () => page.evaluate(() => [...(document.querySelector('.editor-group-container.active')?.querySelectorAll('.change-review-hunk-widget') ?? [])]
 			.map(widget => ({ top: widget.getBoundingClientRect().top, origin: widget.querySelector('.change-review-origin')?.textContent || '-' }))
 			.sort((a, b) => a.top - b.top).map(widget => widget.origin).join(' '));
+		const activeTab = () => page.evaluate(() => (document.querySelector('.editor-group-container.active .tabs-container .tab.active')?.textContent || '').trim());
+		const nextFile = async () => { await page.keyboard.press('Meta+Shift+p'); await page.waitForTimeout(600); await page.keyboard.type('Go to Next File with Changes', { delay: 5 }); await page.waitForTimeout(900); await page.keyboard.press('Enter'); await page.waitForTimeout(2500); };
 		const bar = () => page.evaluate(() => (document.querySelector('.editor-group-container.active .change-review-bar-widget .change-review-label')?.textContent || '').trim());
 		const offer = () => page.locator('.statusbar-item', { hasText: 'Connect Claude Code' }).count();
 		const dialog = () => page.evaluate(() => (document.querySelector('.monaco-dialog-box')?.textContent || '').replace(/\s+/g, ' ').trim());
@@ -238,12 +242,12 @@ const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync
 		const heldAfterRemoval = held();
 		let deletedBar = '';
 		for (let step = 0; step < 8 && !deletedBar.startsWith('Deleted File'); step++) {
-			await page.keyboard.press('Meta+Shift+p'); await page.waitForTimeout(600); await page.keyboard.type('Go to Next File with Changes', { delay: 5 }); await page.waitForTimeout(900); await page.keyboard.press('Enter'); await page.waitForTimeout(2500);
+			await nextFile();
 			deletedBar = await bar();
 		}
 		const shownAsDeleted = deletedBar.startsWith('Deleted File') && await page.evaluate(() => /gone.hello/.test(document.querySelector('.editor-group-container.active .view-lines')?.textContent ?? ''));
 		if (shownAsDeleted) { await page.locator('.editor-group-container.active .change-review-bar-widget .monaco-button', { hasText: 'Approve File' }).first().click(); await page.waitForTimeout(4000); }
-		check('a file that Claude Code deleted and committed is under review as a deleted file, and approving it clears it', removed && !fs.existsSync(file('gone.ts')) && heldAfterRemoval === 'gone.ts' && shownAsDeleted && held() === '',
+		check('a file that Claude Code deleted and committed is under review as a deleted file of Claude Code, and approving it clears it', removed && !fs.existsSync(file('gone.ts')) && heldAfterRemoval === 'gone.ts' && shownAsDeleted && deletedBar === 'Deleted File · Claude' && held() === '',
 			`removed and committed: ${removed && git('log', '-1', '--format=%s') === 'removed by claude'}; held after that: ${heldAfterRemoval || 'nothing'}; the bar said "${deletedBar}"; shows what is gone: ${shownAsDeleted}; held after the approval: ${held() || 'nothing'}`);
 
 		// 10g. a change that the reviewer stages in their own git tool
@@ -284,6 +288,19 @@ const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync
 		await claudeShell('git checkout -q -');
 		await settle(); await open('branch.ts'); await settle();
 		check('a file that differs on another branch is not under review after Claude Code switched branches', switched && onOther && heldOnOther === '' && held() === '' && await origins() === '', `switched: ${switched && onOther}; held on the other branch: ${heldOnOther || 'nothing'}; held now: ${held() || 'nothing'}; shown: ${await origins() || 'nothing'}`);
+
+		// 10i2. files that are deleted without git: one by a shell command of Claude Code, one by another program
+		const erased = await claudeShell('rm src/erased.ts');
+		fs.rmSync(file('dropped.ts'));
+		await settle();
+		const deletedBars = new Map<string, string>();
+		for (let step = 0; step < 20 && deletedBars.size < 2; step++) {
+			await nextFile();
+			const tab = /(?<name>(erased|dropped)\.ts) \(Deleted\)/.exec(await activeTab())?.groups?.name;
+			if (tab) { deletedBars.set(tab, await bar()); }
+		}
+		check('a file that a shell command of Claude Code deleted is marked as deleted by Claude Code, and one that another program deleted is not', erased && !fs.existsSync(file('erased.ts')) && deletedBars.get('erased.ts') === 'Deleted File · Claude' && deletedBars.get('dropped.ts') === 'Deleted File' && deletions() === 'erased.ts 0' && git('status', '--porcelain', '--', 'src/erased.ts') === 'D src/erased.ts',
+			`erased.ts: "${deletedBars.get('erased.ts') ?? 'not shown'}"; dropped.ts: "${deletedBars.get('dropped.ts') ?? 'not shown'}"; on record as taken away, with the number of lines kept: ${deletions() || 'nothing'}`);
 
 		// 10j. what is kept about staging
 		const kept = ['held', 'own', 'repos'].flatMap(folder => fs.existsSync(path.join(record, folder)) ? fs.readdirSync(path.join(record, folder)).map(name => fs.readFileSync(path.join(record, folder, name), 'utf8')) : []);

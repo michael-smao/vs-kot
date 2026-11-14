@@ -38,7 +38,7 @@ import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultS
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, ChangeReviewCommandId, ChangeReviewFileKind, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewEditor, IChangeReviewFile, IChangeReviewService } from '../common/changeReview.js';
-import { findClaudeEntry, IClaudeRecordEntry, IClaudeRecordService } from '../common/claudeRecord.js';
+import { findClaudeDeletion, findClaudeEntry, IClaudeRecordEntry, IClaudeRecordService } from '../common/claudeRecord.js';
 import { IChangeReviewFilesService, ReviewedFile } from './changeReviewedFile.js';
 
 // --- colors: brighter than the diff editor's, since here they sit inside the code that is being read
@@ -340,18 +340,23 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 
 		const reviewed = this._ensureReviewed(model);
 		const file = this._service.getFile(model.uri);
-		const wholeFile = (kind: ChangeReviewFileKind): IReviewHunk[] => [{
-			key: WHOLE_FILE_KEY,
-			wholeFile: kind,
-			mapping: undefined,
-			startLineNumber: 1,
-			endLineNumber: model.getLineCount(),
-			flagged: this._service.hasRequest(file?.uri ?? model.uri, WHOLE_FILE_KEY),
-			// A new file is all added lines, and the editor of a deleted file shows the lines that are gone
-			claude: kind === ChangeReviewFileKind.Added ? findClaudeEntry(this._claudeRecordService.getEntries(file?.uri ?? model.uri), model.getLinesContent(), [])
-				: kind === ChangeReviewFileKind.Deleted ? findClaudeEntry(this._claudeRecordService.getEntries(file?.uri ?? model.uri), [], model.getLinesContent())
-					: undefined
-		}];
+		const wholeFile = (kind: ChangeReviewFileKind): IReviewHunk[] => {
+			const uri = file?.uri ?? model.uri;
+			const claudeEntries = kind !== ChangeReviewFileKind.Modified ? this._claudeRecordService.getEntries(uri) : [];
+			return [{
+				key: WHOLE_FILE_KEY,
+				wholeFile: kind,
+				mapping: undefined,
+				startLineNumber: 1,
+				endLineNumber: model.getLineCount(),
+				flagged: this._service.hasRequest(uri, WHOLE_FILE_KEY),
+				// A new file is all added lines, and the editor of a deleted file shows the lines that are gone. Of a
+				// deleted file the record seldom has the lines: it says that a shell command took the file away.
+				claude: kind === ChangeReviewFileKind.Added ? findClaudeEntry(claudeEntries, model.getLinesContent(), [])
+					: kind === ChangeReviewFileKind.Deleted ? findClaudeEntry(claudeEntries, [], model.getLinesContent()) ?? findClaudeDeletion(claudeEntries, this._claudeRecordService.getHold(uri))
+						: undefined
+			}];
+		};
 
 		// A new or a deleted file is reviewed as a whole
 		if (file && file.kind !== ChangeReviewFileKind.Modified) {

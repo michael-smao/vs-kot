@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { addClaudeHooks, applyClaudeStaging, CLAUDE_HOOK_SCRIPT, ClaudeHooks, ClaudeSettingsError, digestClaudeHookInput, findClaudeEntry, getClaudeHooks, getClaudeStagings, hashClaudeLine, IClaudeHold, IClaudeRecordEntry, IClaudeStaging, isCurrentClaudeHookScript, parseClaudeGitEvent, parseClaudeHold, parseClaudeRecordEntry, removeClaudeHooks } from '../../common/claudeRecord.js';
+import { addClaudeHooks, applyClaudeStaging, CLAUDE_HOOK_SCRIPT, ClaudeHooks, ClaudeSettingsError, digestClaudeGoneEvent, digestClaudeHookInput, findClaudeDeletion, findClaudeEntry, getClaudeHooks, getClaudeStagings, hashClaudeLine, IClaudeHold, IClaudeRecordEntry, IClaudeStaging, isCurrentClaudeHookScript, parseClaudeGitEvent, parseClaudeHold, parseClaudeRecordEntry, removeClaudeHooks } from '../../common/claudeRecord.js';
 
 suite('ClaudeRecord', () => {
 
@@ -93,12 +93,14 @@ suite('ClaudeRecord', () => {
 	test('an entry is read back as it was stored', () => {
 		const stored = entry('/repo/a.ts', 'Edit', { added: h('a'), removed: h('b') });
 		const withoutLines = entry('/repo/a.ts', 'Bash', { isWithoutLines: true });
+		const deletion = entry('/repo/a.ts', 'Bash', { isDeletion: true });
 		assert.deepStrictEqual({
 			stored: parseClaudeRecordEntry(JSON.stringify(stored)),
 			withoutLines: parseClaudeRecordEntry(JSON.stringify(withoutLines)),
+			deletion: parseClaudeRecordEntry(JSON.stringify(deletion)),
 			cutOff: parseClaudeRecordEntry('{"path":"/repo/a.ts","time":'),
 			somethingElse: parseClaudeRecordEntry('{"time":1}'),
-		}, { stored, withoutLines, cutOff: undefined, somethingElse: undefined });
+		}, { stored, withoutLines, deletion, cutOff: undefined, somethingElse: undefined });
 	});
 
 	test('a change is Claude\'s when at least half of its lines are lines that Claude wrote into the file', () => {
@@ -300,6 +302,66 @@ suite('ClaudeRecord', () => {
 	const ownCommand = (kind: string) => `f='${script}'; [ ! -f "$f" ] || exec sh "$f" ${kind} # vs-kot change review`;
 	const ownCommandBefore = `f='${script}'; [ ! -f "$f" ] || sh "$f" before >/dev/null 2>&1; exit 0 # vs-kot change review`;
 
+	// --- files that Claude Code deleted
+
+	test('a shell command that took files away is one entry for each file that went missing', () => {
+		const goneEvent = (...paths: string[]) => ['vs-kot gone 1', 'top /repo', 'session s1', '[gone]', ...paths, ''].join('\n');
+		const gone = (text: string) => digestClaudeGoneEvent(text, time);
+		const deleted = (path: string) => entry(path, 'Bash', { isDeletion: true });
+		assert.deepStrictEqual({
+			files: gone(goneEvent('src/a.ts', 'docs/plan.md')),
+			unusualNames: gone(goneEvent('"sp ace \\"q\\".ts"', 'ümlaut 😀.ts')).map(deletion => deletion.path),
+			listedTwice: gone(goneEvent('src/a.ts', 'src/a.ts')).length,
+			aWholeFolder: gone(goneEvent(...Array.from({ length: 600 }, (_, index) => `gen/${index}.ts`))).length,
+			noFile: gone(goneEvent()),
+			aLaterFormat: gone(goneEvent('src/a.ts').replace('vs-kot gone 1', 'vs-kot gone 2')),
+			noRepository: gone(goneEvent('src/a.ts').replace('top /repo\n', '')),
+			whatWasStaged: gone(gitEvent({ index: [was(A, 'src/a.ts')] })),
+			somethingElse: gone('{"tool_name":"Bash"}'),
+		}, {
+			files: [deleted('/repo/src/a.ts'), deleted('/repo/docs/plan.md')],
+			unusualNames: ['/repo/sp ace "q".ts', '/repo/ümlaut 😀.ts'],
+			listedTwice: 1,
+			aWholeFolder: 500,
+			noFile: [],
+			aLaterFormat: [],
+			noRepository: [],
+			whatWasStaged: [],
+			somethingElse: [],
+		});
+	});
+
+	test('a file that is gone is Claude\'s when the last thing on record is that Claude took it away, or when Claude removed it from git', () => {
+		const edit = entry('/repo/a.ts', 'Edit', { added: h('known();') });
+		const deletion = entry('/repo/a.ts', 'Bash', { time: time + 1000, isDeletion: true });
+		const writtenAnew = entry('/repo/a.ts', 'Write', { time: time + 2000, added: h('again();') });
+		const found = (entries: IClaudeRecordEntry[], held?: IClaudeHold) => [findClaudeDeletion(entries, held)].map(found => found ? `${found.tool} ${found.time}` : undefined)[0];
+		assert.deepStrictEqual({
+			takenAway: found([deletion]),
+			editedThenTakenAway: found([deletion, edit]),
+			takenAwayThenWrittenAnew: found([edit, deletion, writtenAnew]),
+			onlyEdited: found([edit]),
+			nothingOnRecord: found([]),
+			removedFromGit: found([], hold({ staged: null, time: 3000 })),
+			editedThenRemovedFromGit: found([edit], hold({ staged: null, time: 3000 })),
+			stagedAndDeletedBySomeone: found([], hold()),
+			noLongerHeld: found([], hold({ staged: null, released: 4000 })),
+			// The lines of a file that is gone are lines that were taken away: an entry without lines says nothing by them
+			notByItsLines: findClaudeEntry([deletion], [], ['known();']),
+		}, {
+			takenAway: `Bash ${time + 1000}`,
+			editedThenTakenAway: `Bash ${time + 1000}`,
+			takenAwayThenWrittenAnew: undefined,
+			onlyEdited: undefined,
+			nothingOnRecord: undefined,
+			removedFromGit: 'Bash 3000',
+			editedThenRemovedFromGit: 'Bash 3000',
+			stagedAndDeletedBySomeone: undefined,
+			noLongerHeld: undefined,
+			notByItsLines: undefined,
+		});
+	});
+
 	test('connecting adds four hooks after the ones that are there, and disconnecting gives the file back as it was', () => {
 		// the way Claude Code writes its settings
 		const settings = JSON.stringify({
@@ -387,9 +449,9 @@ suite('ClaudeRecord', () => {
 	test('the stored script is replaced unless it is this one or a newer one', () => {
 		assert.deepStrictEqual({
 			thisOne: isCurrentClaudeHookScript(CLAUDE_HOOK_SCRIPT),
-			newer: isCurrentClaudeHookScript(CLAUDE_HOOK_SCRIPT.replace('hook version 2:', 'hook version 3:') + '# more'),
+			newer: isCurrentClaudeHookScript(CLAUDE_HOOK_SCRIPT.replace(/hook version \d+:/, 'hook version 99:') + '# more'),
 			changedByHand: isCurrentClaudeHookScript(CLAUDE_HOOK_SCRIPT + 'echo more\n'),
-			older: isCurrentClaudeHookScript(CLAUDE_HOOK_SCRIPT.replace('hook version 2:', 'hook version 1:')),
+			older: isCurrentClaudeHookScript(CLAUDE_HOOK_SCRIPT.replace(/hook version \d+:/, 'hook version 1:')),
 			somethingElse: isCurrentClaudeHookScript('#!/bin/sh\n'),
 			missing: isCurrentClaudeHookScript(undefined),
 		}, { thisOne: true, newer: true, changedByHand: false, older: false, somethingElse: false, missing: false });
