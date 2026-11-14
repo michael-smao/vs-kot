@@ -335,7 +335,7 @@
 		"editor.suggest.selectionMode": "whenQuickSuggestion"
 	},
 	"vsKotSecretsInMemory": true,
-	"vsKotVersion": "0.5.4",
+	"vsKotVersion": "0.5.5",
 	"vsKotUpdatePublicKeys": [
 		"MCowBQYDK2VwAyEAdm9PNburT26260e/jYu2RCWFZeBxKfY6IOwSYC8n/DM="
 	],
