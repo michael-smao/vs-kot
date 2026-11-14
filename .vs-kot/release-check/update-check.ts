@@ -7,7 +7,8 @@
 // folder and finds the real build as a newer release on a server that runs on this Mac. Six cases:
 //
 //   1. it downloads the release, and "Update" in the title bar replaces the app and opens the new one
-//   2. it downloads the release, and simply quitting replaces the app
+//   2. it clears away what a download and an exchange that were cut off left behind, downloads the release, and
+//      simply quitting replaces the app
 //   3. the zip was changed on the way and no longer has the announced SHA-256: nothing is installed
 //   4. the release is not signed: nothing is downloaded
 //   5. the release announces another zip than the one that was signed: nothing is downloaded
@@ -109,6 +110,20 @@ function installOldCopy(): void {
 	run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', app]);
 }
 
+/**
+ * What a download and an exchange leave behind when they are cut off: half an unpacked app in the download folder, and
+ * the previous app next to the installed one. Each holds the one file an app cannot delete with Electron's `fs`.
+ */
+const leftovers = [path.join(updateHome, 'work', 'unpacked', path.basename(source)), path.join(installDir, `.${path.basename(source)}.old`)];
+function leaveLeftovers(): void {
+	for (const leftover of leftovers) {
+		const code = path.join(leftover, 'Contents', 'Resources', 'app');
+		fs.mkdirSync(code, { recursive: true });
+		run('/bin/cp', ['-c', path.join(source, 'Contents', 'Resources', 'app', 'node_modules.asar'), code]);
+		fs.writeFileSync(path.join(code, 'product.json'), '{}');
+	}
+}
+
 function start(): void {
 	run('/usr/bin/open', ['-n', app, '--args', ws, `--user-data-dir=${ud}`, `--extensions-dir=${path.join(root, 'ext')}`, `--remote-debugging-port=${cdpPort}`, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-workspace-trust', '--use-inmemory-secretstorage', '--use-mock-keychain', '--disable-extension=vs-kot.tab-completion']);
 }
@@ -176,8 +191,10 @@ async function quit(): Promise<boolean> {
 		}
 		await quit();
 
-		// 2. Download, then simply quit
-		announcedSha = realSha; announcedSignature = realSignature; installOldCopy(); start();
+		// 2. Leftovers of a cut-off download and exchange, then download, then simply quit
+		announcedSha = realSha; announcedSignature = realSignature; installOldCopy(); leaveLeftovers(); start();
+		const cleared = await until('the leftovers to be cleared away', () => leftovers.every(leftover => !fs.existsSync(leftover)), 90);
+		check('2. what a download and an exchange that were cut off left behind is cleared away', cleared, cleared ? '' : `still there: ${leftovers.filter(leftover => fs.existsSync(leftover)).map(leftover => path.basename(path.dirname(leftover)) + '/' + path.basename(leftover)).join(', ')}; ${(mainLog().split('\n').find(line => /could not empty the download folder/.test(line)) ?? 'no warning in the log').slice(-120)}`);
 		ready = await until('the update to be downloaded and checked', () => /update#setState ready/.test(mainLog()), 240);
 		const gone = ready && await quit();
 		const swappedOnQuit = gone && await until('the new version to be in place', () => installedVersion() === newVersion, 60);
@@ -223,7 +240,7 @@ async function quit(): Promise<boolean> {
 	server.close();
 	if (!process.env.KEEP) {
 		fs.rmSync(root, { recursive: true, force: true });
-		if (process.argv[3]) { fs.rmSync(app, { recursive: true, force: true }); try { fs.rmdirSync(installDir); } catch { /* not empty: not ours to remove */ } }
+		if (process.argv[3]) { fs.rmSync(app, { recursive: true, force: true }); fs.rmSync(leftovers[1], { recursive: true, force: true }); try { fs.rmdirSync(installDir); } catch { /* not empty: not ours to remove */ } }
 	}
 	console.log(`${results.filter(Boolean).length} of ${results.length} checks passed`); process.exit(results.every(Boolean) ? 0 : 1);
 })();

@@ -207,7 +207,7 @@ export class VsKotUpdateService extends AbstractUpdateService implements IRelaun
 
 	protected override async postInitialize(): Promise<void> {
 		// what an interrupted exchange may have left next to the app
-		await Promise.allSettled(['new', 'old'].map(suffix => fs.promises.rm(join(dirname(this.appPath), `.${basename(this.appPath)}.${suffix}`), { recursive: true, force: true })));
+		await Promise.allSettled(['new', 'old'].map(suffix => this.removeFolder(join(dirname(this.appPath), `.${basename(this.appPath)}.${suffix}`))));
 
 		const staged = await this.readStaged();
 		if (!staged) {
@@ -495,10 +495,18 @@ export class VsKotUpdateService extends AbstractUpdateService implements IRelaun
 
 	private async emptyWork(): Promise<void> {
 		try {
-			await fs.promises.rm(this.workPath, { recursive: true, force: true });
+			await this.removeFolder(this.workPath);
 		} catch (err) {
 			this.logService.warn('update#vsKot - could not empty the download folder', err);
 		}
+	}
+
+	/**
+	 * Deletes a folder that may hold an app. Not with `fs.promises.rm`: inside Electron, `fs` takes an `.asar` file
+	 * for a folder and cannot delete it, so an app's `node_modules.asar` and the folders around it would stay.
+	 */
+	private async removeFolder(path: string): Promise<void> {
+		await execFileAsync('/bin/rm', ['-rf', path]);
 	}
 
 	private async readLine(path: string): Promise<string | undefined> {
