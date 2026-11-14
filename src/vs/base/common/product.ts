@@ -131,6 +131,8 @@ export interface IProductConfiguration {
 	readonly vsKotVersion?: string;
 	/** vs-kot: the public halves of the keys a release may be signed with. The app installs no update that is not signed with one of them. */
 	readonly vsKotUpdatePublicKeys?: readonly string[];
+	/** vs-kot: secrets such as sign-ins are kept in memory until the editor quits, and the system keychain is never used. */
+	readonly vsKotSecretsInMemory?: boolean;
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];
 

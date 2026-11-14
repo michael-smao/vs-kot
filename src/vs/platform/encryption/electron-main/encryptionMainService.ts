@@ -7,6 +7,7 @@ import { safeStorage as safeStorageElectron, app } from 'electron';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { KnownStorageProvider, IEncryptionMainService, PasswordStoreCLIOption } from '../common/encryptionService.js';
 import { ILogService } from '../../log/common/log.js';
+import { IEnvironmentMainService } from '../../environment/electron-main/environmentMainService.js';
 
 // These APIs are currently only supported in our custom build of electron so
 // we need to guard against them not being available.
@@ -21,7 +22,8 @@ export class EncryptionMainService implements IEncryptionMainService {
 	_serviceBrand: undefined;
 
 	constructor(
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@IEnvironmentMainService private readonly environmentMainService: IEnvironmentMainService
 	) {
 		// if this commandLine switch is set, the user has opted in to using basic text encryption
 		if (app.commandLine.getSwitchValue('password-store') === PasswordStoreCLIOption.basic) {
@@ -31,9 +33,25 @@ export class EncryptionMainService implements IEncryptionMainService {
 		}
 	}
 
+	/**
+	 * vs-kot: while secrets are kept in memory, nothing here may reach the store of the system. On macOS that is
+	 * the keychain, and macOS asks the user for its password when an app with another signature reads the entry,
+	 * which every update of an ad hoc signed app is. Encryption then counts as not available.
+	 */
+	private get isSwitchedOff(): boolean {
+		return !!this.environmentMainService.useInMemorySecretStorage;
+	}
+
+	private assertSwitchedOn(): void {
+		if (this.isSwitchedOff) {
+			throw new Error('[EncryptionMainService] Encryption is switched off: secrets are kept in memory.');
+		}
+	}
+
 	async encrypt(value: string): Promise<string> {
 		this.logService.trace('[EncryptionMainService] Encrypting value...');
 		try {
+			this.assertSwitchedOn();
 			const result = JSON.stringify(safeStorage.encryptString(value));
 			this.logService.trace('[EncryptionMainService] Encrypted value.');
 			return result;
@@ -46,6 +64,7 @@ export class EncryptionMainService implements IEncryptionMainService {
 	async decrypt(value: string): Promise<string> {
 		let parsedValue: { data: string };
 		try {
+			this.assertSwitchedOn();
 			parsedValue = JSON.parse(value);
 			if (!parsedValue.data) {
 				throw new Error(`[EncryptionMainService] Invalid encrypted value: ${value}`);
@@ -63,6 +82,10 @@ export class EncryptionMainService implements IEncryptionMainService {
 	}
 
 	isEncryptionAvailable(): Promise<boolean> {
+		if (this.isSwitchedOff) {
+			this.logService.trace('[EncryptionMainService] Encryption is switched off: secrets are kept in memory.');
+			return Promise.resolve(false);
+		}
 		this.logService.trace('[EncryptionMainService] Checking if encryption is available...');
 		const result = safeStorage.isEncryptionAvailable();
 		this.logService.trace('[EncryptionMainService] Encryption is available: ', result);

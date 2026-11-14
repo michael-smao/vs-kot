@@ -261,7 +261,10 @@ export abstract class AbstractNativeEnvironmentService implements INativeEnviron
 	get disableWorkspaceTrust(): boolean { return !!this.args['disable-workspace-trust']; }
 
 	@memoize
-	get useInMemorySecretStorage(): boolean { return !!this.args['use-inmemory-secretstorage']; }
+	get useInMemorySecretStorage(): boolean {
+		// vs-kot: the product can ask for this too, so that the editor never reaches for the system keychain
+		return !!this.args['use-inmemory-secretstorage'] || !!this.productService.vsKotSecretsInMemory;
+	}
 
 	@memoize
 	get policyFile(): URI | undefined {
