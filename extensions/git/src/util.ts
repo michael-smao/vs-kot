@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event, Disposable, EventEmitter, SourceControlHistoryItemRef, l10n, workspace, Uri, DiagnosticSeverity, env, SourceControlHistoryItem } from 'vscode';
-import { basename, dirname, normalize, sep, relative } from 'path';
+import { basename, dirname, normalize, sep, relative, resolve } from 'path';
 import { Readable } from 'stream';
 import { promises as fs, createReadStream } from 'fs';
 import byline from 'byline';
@@ -320,6 +320,28 @@ function normalizePath(path: string): string {
 
 	// Normalize the path
 	return normalize(path);
+}
+
+/**
+ * vs-kot: the file that a path stands for when it is a symbolic link, through any further links. Only the link
+ * itself is followed, not the folders above it: a repository that was opened through a linked folder keeps the
+ * path it was opened with.
+ * @returns the path itself when it is no link, and `undefined` when it is a link that leads to no file
+ */
+export async function resolveFileLink(path: string): Promise<string | undefined> {
+	let current = path;
+	for (let depth = 0; depth < 16; depth++) {
+		try {
+			const stat = await fs.lstat(current);
+			if (!stat.isSymbolicLink()) {
+				return depth === 0 || stat.isFile() ? current : undefined;
+			}
+			current = resolve(dirname(current), await fs.readlink(current));
+		} catch {
+			return depth === 0 ? current : undefined; // nothing is there: that is no link, or it is where a link leads
+		}
+	}
+	return undefined; // links that lead in a circle
 }
 
 export function isDescendant(parent: string, descendant: string): boolean {

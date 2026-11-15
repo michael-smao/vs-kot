@@ -5,7 +5,7 @@
 
 import { FileType, l10n, LogOutputChannel, QuickDiffProvider, Uri, workspace } from 'vscode';
 import { IRepositoryResolver, Repository } from './repository';
-import { isDescendant, pathEquals } from './util';
+import { isDescendant, pathEquals, resolveFileLink } from './util';
 import { toGitUri } from './uri';
 import { Status } from './api/git.constants';
 
@@ -32,11 +32,17 @@ export class GitQuickDiffProvider implements QuickDiffProvider {
 			return undefined;
 		}
 
-		// Ignore symbolic links
+		// vs-kot: a symbolic link to a file is that file. Git has the link itself staged, as the path it points to,
+		// and that is not what an editor of the link shows and writes. Upstream ignores symbolic links here.
 		const stat = await workspace.fs.stat(uri);
 		if ((stat.type & FileType.SymbolicLink) !== 0) {
-			this.logger.trace(`[Repository][provideOriginalResource] Resource is a symbolic link: ${uri.toString()}`);
-			return undefined;
+			const target = await resolveFileLink(uri.fsPath);
+			if (target === undefined) {
+				this.logger.trace(`[Repository][provideOriginalResource] Resource is a symbolic link that leads to no file: ${uri.toString()}`);
+				return undefined;
+			}
+			uri = Uri.file(target);
+			this.logger.trace(`[Repository][provideOriginalResource] Resource is a symbolic link to: ${uri.toString()}`);
 		}
 
 		// Ignore path that is not inside the current repository

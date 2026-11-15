@@ -14,7 +14,7 @@ import { Model } from './model';
 import { GitResourceGroup, Repository, Resource, ResourceGroupType } from './repository';
 import { DiffEditorSelectionHunkToolbarContext, LineChange, applyLineChanges, getIndexDiffInformation, getModifiedRange, getWorkingTreeDiffInformation, intersectDiffWithRange, invertLineChange, toLineChanges, toLineRanges, compareLineChanges } from './staging';
 import { fromGitUri, toGitUri, isGitUri, toMergeUris, toMultiFileDiffEditorUris } from './uri';
-import { coalesce, DiagnosticSeverityConfig, dispose, fromNow, getHistoryItemDisplayName, getStashDescription, grep, isDefined, isDescendant, isLinuxSnap, isRemote, isWindows, pathEquals, relativePath, subject, toDiagnosticSeverity, truncate } from './util';
+import { coalesce, DiagnosticSeverityConfig, dispose, fromNow, getHistoryItemDisplayName, getStashDescription, grep, isDefined, isDescendant, isLinuxSnap, isRemote, isWindows, pathEquals, relativePath, resolveFileLink, subject, toDiagnosticSeverity, truncate } from './util';
 import { GitTimelineItem } from './timelineProvider';
 import { ApiRepository } from './api/api1';
 import { getRemoteSourceActions, pickRemoteSource } from './remoteSource';
@@ -1965,7 +1965,13 @@ export class CommandCenter {
 		// Line endings and a byte order mark are not what this is about, and they do not survive a text model unchanged
 		const normalize = (text: string | undefined) => text?.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
 
-		const results = await this.runByRepository(uri, async (repository, resource) => {
+		// A symbolic link is the file it points to: a text staged at the path of the link would become what the link points to
+		const file = await resolveFileLink(uri.fsPath);
+		if (file === undefined) {
+			return undefined;
+		}
+
+		const results = await this.runByRepository(Uri.file(file), async (repository, resource) => {
 			if (expected) {
 				// The caller built the text on the staged version it saw a moment ago. When git has another one by
 				// now, because something was committed or staged in between, staging the text would undo that.
@@ -1999,7 +2005,12 @@ export class CommandCenter {
 		const encoding = workspace.textDocuments.find(document => document.uri.toString() === uri.toString())?.encoding ?? 'utf8';
 
 		try {
-			const results = await this.runByRepository(uri, async (repository, resource) => {
+			// As in git.stageContent: a symbolic link is the file it points to
+			const file = await resolveFileLink(uri.fsPath);
+			if (file === undefined) {
+				return {}; // a link that leads to no file has no staged version
+			}
+			const results = await this.runByRepository(Uri.file(file), async (repository, resource) => {
 				if (typeof request.read === 'string') {
 					let content: Buffer;
 					try {

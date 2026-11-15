@@ -23,6 +23,8 @@ fs.rmSync(ws, { recursive: true, force: true }); fs.mkdirSync(path.join(ws, 'src
 const A = `export interface Item {\n    name: string;\n    price: number;\n    qty: number;\n}\n\nexport function total(items: Item[]): number {\n    return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\n\nexport function names(items: Item[]): string[] {\n    return items.map((item) => item.name);\n}\n`;
 const B = `export function greet(name: string): string {\n    return "Hello " + name;\n}\n\nexport function bye(name: string): string {\n    return "Bye " + name;\n}\n`;
 fs.writeFileSync(path.join(ws, 'src', 'a.ts'), A); fs.writeFileSync(path.join(ws, 'src', 'b.ts'), B); fs.writeFileSync(path.join(ws, 'src', 'c.ts'), B.replace(/greet/g, 'welcome'));
+// and a file with a symbolic link to it, both known to git
+fs.writeFileSync(path.join(ws, 'src', 'target.ts'), B.replace(/greet/g, 'hello')); fs.symlinkSync('target.ts', path.join(ws, 'src', 'alias.ts'));
 git('init', '-q', '.'); git('add', '.'); git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'init');
 fs.writeFileSync(path.join(ws, 'src', 'b.ts'), B.replace('"Hello " + name', '`Hello, ${name}!`'));
 
@@ -113,6 +115,17 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 		check('a new file written here needs no approval and is staged on save', none(d) && git('diff', '--cached', '--name-only').split('\n').includes('src/mine.ts'), `${show(d)}; staged: ${git('diff', '--cached', '--name-only').replace(/\n/g, ', ')}`);
 		await open('theirs.ts'); await settle(); d = await drawn();
 		check('a new file written by another program is shown for review as a whole', /New File/.test(d.bar) && d.addedLines >= 1, show(d));
+
+		// 12. a symbolic link: what is written in its editor is written into the file it points to
+		await open('alias.ts'); await settle(); const linkBefore = await drawn();
+		await goTo(6); await page.keyboard.type(' // through the link', { delay: 10 }); await settle(); d = await drawn();
+		check('typing in a symbolic link is not shown as a change', none(linkBefore) && none(d) && d.file === 'alias.ts', `before ${show(linkBefore)}; after typing ${show(d)}`);
+		await page.keyboard.press('Meta+s'); await page.waitForTimeout(5000); d = await drawn();
+		const isStillLink = git('ls-files', '-s', 'src/alias.ts').startsWith('120000') && fs.lstatSync(path.join(ws, 'src', 'alias.ts')).isSymbolicLink();
+		const isTargetStaged = git('show', ':src/target.ts').includes('// through the link');
+		check('saving it stages what was written, in the file the link points to, and the link stays a link', none(d) && isTargetStaged && !git('diff', '--name-only').split('\n').includes('src/target.ts') && isStillLink, `staged in the target: ${isTargetStaged}; unstaged: ${git('diff', '--name-only').replace(/\n/g, ', ') || 'nothing'}; still a link: ${isStillLink}; ${show(d)}`);
+		await open('target.ts'); await settle(); d = await drawn();
+		check('the file it points to has nothing to review either', none(d) && d.file === 'target.ts', show(d));
 	} catch (e) { check('the run finished', false, String(e && e.message || e).slice(0, 300)); }
 	await Promise.race([app.close(), new Promise(r => setTimeout(r, 15000))]);
 	console.log(`${results.filter(Boolean).length} of ${results.length} checks passed`); process.exit(results.every(Boolean) ? 0 : 1);

@@ -14,6 +14,9 @@
 // One such object exists per file and lives as long as the file is loaded. So all editors of a file agree, and what
 // was typed is still known as the reviewer's own after a switch to another tab and back.
 //
+// A symbolic link to a file is reviewed as the file it points to: the editor of the link shows that file and
+// writes into it. The git extension serves the staged version of that file for the link, and stages there.
+//
 // What git has staged only counts as reviewed when the reviewer staged it. Claude Code stages and commits too. A
 // file whose changes it staged is held under review (see ../common/claudeRecord.ts): its reviewed version is then
 // the one from before, kept as a blob of its own, and git is not asked to stage it until the reviewer agreed to
@@ -26,6 +29,7 @@ import { Disposable, IReference, MutableDisposable, toDisposable } from '../../.
 import { ResourceMap } from '../../../../base/common/map.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { isEqual } from '../../../../base/common/resources.js';
+import { URI } from '../../../../base/common/uri.js';
 import { Range } from '../../../../editor/common/core/range.js';
 import { DetailedLineRangeMapping, LineRangeMapping, RangeMapping } from '../../../../editor/common/diff/rangeMapping.js';
 import { ILanguageService } from '../../../../editor/common/languages/language.js';
@@ -45,9 +49,8 @@ import { ClaudeConnectionState, IClaudeHold, IClaudeRecordService } from '../com
 const OUTSIDE_SOURCES: ReadonlySet<string> = new Set(['reloadFromDisk', 'setValue', 'Chat.applyEdits', 'inlineChat.applyEdits']);
 const MAX_REMEMBERED_OUTSIDE_CHANGES = 64;
 
-/** Up to this size, the text a file had when it was first seen is kept until git has served the staged version. */
+/** Up to this size, it is noted how a file looked when it was first seen, to compare with the staged version once git serves it. */
 const MAX_FIRST_SIGHT_LENGTH = 2_000_000;
-const FIRST_SIGHT_KEPT_MS = 15_000;
 
 /** How long after the reviewer's own edit the changes are computed anew, to make sure they are still what is shown. */
 const VERIFY_DELAY_MS = 800;
@@ -76,6 +79,12 @@ export class ReviewedFile extends Disposable {
 	/** Which state of the staged version was last looked at: git announces changes more often than it has one. */
 	private _seenIndex: { readonly model: ITextModel; readonly versionId: number } | undefined;
 	private _seenIndexHash: number | undefined;
+	/**
+	 * The file in git that this one is reviewed as: the file itself, or the file it points to when it is a symbolic
+	 * link. Git says which, by the staged version it serves. What is stored about a file, such as that it is held
+	 * under review, is stored for that file.
+	 */
+	private _gitFile: URI;
 
 	private readonly _baseline = this._register(new MutableDisposable<ITextModel>());
 	/** Whether the reviewed version is that of a file git has no version of. Such a file started out empty. */
@@ -119,11 +128,13 @@ export class ReviewedFile extends Disposable {
 	private readonly _outsideChanges: { readonly before: number; readonly after: number }[] = [];
 
 	/**
-	 * The text of the file when it was first seen. Git serves the staged version a moment later. If the two are
-	 * the same, everything written in between is the reviewer's own.
+	 * How the file looked when it was last seen as it came from outside: when it was opened, or when another
+	 * program last wrote it. Git serves the staged version later. That is a moment later as a rule, and much later
+	 * where git starts late, as in a window whose folder is not trusted yet. If the two are the same, everything
+	 * written in between is the reviewer's own. So this is kept until git has served the staged version, however
+	 * long that takes. It is the hash and the length of the text, not a second copy of it.
 	 */
-	private _firstSight: string | undefined;
-	private readonly _forgetFirstSight = this._register(new RunOnceScheduler(() => this._firstSight = undefined, FIRST_SIGHT_KEPT_MS));
+	private _firstSight: { readonly hash: number; readonly length: number } | undefined;
 
 	/** Whether it is known which files are held under review. Until then no version is taken as the reviewed one. */
 	private _areHoldsKnown = false;
@@ -162,12 +173,13 @@ export class ReviewedFile extends Disposable {
 	) {
 		super();
 
+		this._gitFile = model.uri;
 		this._isEnabled = this._changeReviewService.enabled;
 		this._alternativeVersionId = model.getAlternativeVersionId();
 		this._rememberFirstSight();
 		this._register(model.onDidChangeContent(e => this._onDidChangeModelContent(e)));
 		this._register(this._claudeRecordService.onDidChangeHolds(uri => {
-			if (isEqual(uri, model.uri)) {
+			if (isEqual(uri, this._gitFile)) {
 				this._syncHold();
 			}
 		}));
@@ -239,6 +251,13 @@ export class ReviewedFile extends Disposable {
 		const quickDiffModel = this._quickDiffModel.value?.object;
 		const primaryQuickDiff = quickDiffModel?.quickDiffs.find(quickDiff => quickDiff.kind === 'primary');
 		const index = primaryQuickDiff ? quickDiffModel?.getDiffEditorModel(primaryQuickDiff.originalResource)?.original : undefined;
+
+		// A symbolic link is reviewed as the file it points to: git serves the staged version of that file for it
+		const gitFile = primaryQuickDiff && this.model.uri.scheme === Schemas.file ? getStagedFile(primaryQuickDiff.originalResource) : undefined;
+		if (gitFile && !isEqual(gitFile, this._gitFile)) {
+			this._gitFile = gitFile;
+			this._syncHold();
+		}
 
 		if (index !== this._index) {
 			this._index = index;
@@ -322,12 +341,13 @@ export class ReviewedFile extends Disposable {
 		if (!baseline || this._isVirtual) {
 			// The first sight of the staged version. If the file was the same when it was first seen, all that
 			// differs now was written here in the meantime, by the reviewer.
-			const isOwnSinceFirstSight = this._firstSight !== undefined && this._firstSight === contents;
+			const isOwnSinceFirstSight = this._firstSight !== undefined && this._firstSight.length === contents.length && this._firstSight.hash === contentsHash;
 			const reviewed = isOwnSinceFirstSight || (baseline && baseline.getValue() === this.model.getValue()) ? this.model.getValue() : contents;
 			this._firstSight = undefined;
-			this._forgetFirstSight.cancel();
 			this._setBaseline(reviewed, false);
 			this._hasUnstagedOwnEdits = reviewed !== contents;
+			// What was written and saved before git served anything is on disk, and git lists the file for it
+			this._stageOwnEdits();
 		} else if (baseline.getValue() !== contents) {
 			// Git has another staged version: something was staged or unstaged outside of this editor
 			this._takeOutsideIndex();
@@ -346,7 +366,7 @@ export class ReviewedFile extends Disposable {
 		let isCommandRunning = false;
 		if (this._claudeRecordService.connectionState === ClaudeConnectionState.Connected) {
 			try {
-				isCommandRunning = await this._claudeRecordService.settle(this.model.uri);
+				isCommandRunning = await this._claudeRecordService.settle(this._gitFile);
 			} catch {
 				isCommandRunning = false;
 			}
@@ -358,7 +378,7 @@ export class ReviewedFile extends Disposable {
 		if (this._hold) {
 			return; // Claude Code staged it, as was found meanwhile
 		}
-		if (this._claudeRecordService.getHold(this.model.uri)) {
+		if (this._claudeRecordService.getHold(this._gitFile)) {
 			this._syncHold();
 			return;
 		}
@@ -388,7 +408,7 @@ export class ReviewedFile extends Disposable {
 		}
 
 		const before = this._hold;
-		const hold = this._isEnabled ? this._claudeRecordService.getHold(this.model.uri) : undefined;
+		const hold = this._isEnabled ? this._claudeRecordService.getHold(this._gitFile) : undefined;
 		this._hold = hold;
 
 		if (!hold) {
@@ -455,10 +475,10 @@ export class ReviewedFile extends Disposable {
 				if (hold.original !== undefined && hold.original !== hold.reviewed) {
 					// Git cleared away the version that was written for an approval. What was approved shows as a
 					// change again: the file is held against the version from before Claude Code staged it.
-					this._claudeRecordService.setHoldReviewed(this.model.uri, hold.original);
+					this._claudeRecordService.setHoldReviewed(this._gitFile, hold.original);
 				} else {
 					// Git does not have that version anymore. The file is taken as git has it, as it was before there were holds.
-					this._claudeRecordService.releaseHold(this.model.uri);
+					this._claudeRecordService.releaseHold(this._gitFile);
 				}
 				return;
 			}
@@ -510,7 +530,7 @@ export class ReviewedFile extends Disposable {
 		this._isCheckingHold = true;
 		try {
 			const isOutdated = () => this._store.isDisposed || requestId !== this._holdCheckId || this._hold !== hold || !this._isHoldApplied;
-			const uri = this.model.uri;
+			const uri = this._gitFile;
 
 			const answer = await this._askGit({});
 			if (isOutdated()) {
@@ -579,7 +599,7 @@ export class ReviewedFile extends Disposable {
 			}
 
 			// Still held. Once the reviewer agreed to all there is in the file, that is staged, like any approval
-			if (reviewed !== undefined && reviewed === this.model.getValue() && this._expectedIndex === undefined && !this._textFileService.isDirty(uri)) {
+			if (reviewed !== undefined && reviewed === this.model.getValue() && this._expectedIndex === undefined && !this._textFileService.isDirty(this.model.uri)) {
 				this._sendToGit(reviewed);
 			}
 		} finally {
@@ -621,7 +641,7 @@ export class ReviewedFile extends Disposable {
 					if (this._writtenBlobs.length > 16) {
 						this._writtenBlobs.shift();
 					}
-					await this._claudeRecordService.setHoldReviewed(this.model.uri, blob);
+					await this._claudeRecordService.setHoldReviewed(this._gitFile, blob);
 				}
 			}
 		} finally {
@@ -673,8 +693,8 @@ export class ReviewedFile extends Disposable {
 
 	private _rememberFirstSight(): void {
 		if (this.model.getValueLength() <= MAX_FIRST_SIGHT_LENGTH) {
-			this._firstSight = this.model.getValue();
-			this._forgetFirstSight.schedule();
+			const text = this.model.getValue();
+			this._firstSight = { hash: hash(text), length: text.length };
 		} else {
 			this._firstSight = undefined;
 		}
@@ -739,7 +759,7 @@ export class ReviewedFile extends Disposable {
 
 		const baseline = this._baseline.value;
 		if (!baseline) {
-			if (!isOwn && this._forgetFirstSight.isScheduled()) {
+			if (!isOwn) {
 				this._rememberFirstSight(); // what came from outside is how the file looks now
 			}
 			return;
@@ -965,7 +985,7 @@ export class ReviewedFile extends Disposable {
 		}
 
 		const index = this._index && !this._index.isDisposed() ? this._index : undefined;
-		if (!index && this._changeReviewService.getFile(this.model.uri)?.kind !== ChangeReviewFileKind.Added) {
+		if (!index && this._changeReviewService.getFile(this._gitFile)?.kind !== ChangeReviewFileKind.Added) {
 			return; // git does not list the file: it has not noticed it yet, or it ignores it
 		}
 
@@ -1064,8 +1084,24 @@ export class ReviewedFile extends Disposable {
 		}
 		const blob = (await this._askGit({}))?.blob;
 		if (blob && !this._store.isDisposed) {
-			await this._claudeRecordService.noteOwnStaging(this.model.uri, blob);
+			await this._claudeRecordService.noteOwnStaging(this._gitFile, blob);
 		}
+	}
+}
+
+/**
+ * The file whose staged version git serves at a resource. The git extension names it in the query of that resource,
+ * the same way ../browser/changeReviewService.ts names a version of a file to show.
+ */
+function getStagedFile(original: URI): URI | undefined {
+	if (original.scheme !== Schemas.git) {
+		return undefined;
+	}
+	try {
+		const query: { readonly path?: string } | null = JSON.parse(original.query);
+		return typeof query?.path === 'string' ? URI.file(query.path) : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
