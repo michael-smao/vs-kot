@@ -82,8 +82,9 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 		check('Shift+F7 steps back through the changes', JSON.stringify(back) === JSON.stringify([7, 6, 5]) || JSON.stringify(back) === JSON.stringify([6, 5, 4]), back.join(', '));
 
 		// 5. the file is rewritten many times in a row from outside
-		for (let i = 0; i < 16; i++) { fs.writeFileSync(file('big.ts'), changed(i % 2 === 0 ? [20] : [20, 22, 24])); await sleep(140); }
-		fs.writeFileSync(file('big.ts'), changed([20])); await sleep(4500); d = await drawn(); let a = await all();
+		// The extra change is far enough from the others to be one of its own: changes that are close to each other are one
+		for (let i = 0; i < 16; i++) { fs.writeFileSync(file('big.ts'), changed(i % 2 === 0 ? [85] : [85, 87, 89])); await sleep(140); }
+		fs.writeFileSync(file('big.ts'), changed([85])); await sleep(4500); d = await drawn(); let a = await all();
 		check('after 17 rapid rewrites from outside, exactly the changes of the last one are shown', d.of === HUNKS + 1 && a.pills === HUNKS + 1 && a.zones === 8 && a.zoneNodes === 8, `bar "${d.bar}", ${a.pills} widgets, ${a.zones} removed blocks`);
 
 		// 6. typing next to changes rebuilds nothing

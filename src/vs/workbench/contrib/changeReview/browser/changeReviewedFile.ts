@@ -35,6 +35,7 @@ import { IModelService } from '../../../../editor/common/services/model.js';
 import { IModelContentChangedEvent } from '../../../../editor/common/textModelEvents.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { SaveReason } from '../../../common/editor.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
 import { IQuickDiffModelService, QuickDiffModel } from '../../scm/browser/quickDiffModel.js';
 import { ChangeReviewFileKind, IChangeReviewService } from '../common/changeReview.js';
@@ -110,6 +111,8 @@ export class ReviewedFile extends Disposable {
 
 	private _isEnabled: boolean;
 	private _isLastChangeFromOutside = true;
+	/** How many saves that follow an approval are under way. What they change in the file is not the reviewer writing in it. */
+	private _approvalSaves = 0;
 
 	private _alternativeVersionId: number;
 	/** The edits that came from outside, as steps of the undo history: undoing or redoing one is not the reviewer's writing. */
@@ -743,7 +746,9 @@ export class ReviewedFile extends Disposable {
 		}
 
 		if (isOwn) {
-			this._changeReviewService.reportOwnEdit(this.model.uri);
+			if (this._approvalSaves === 0) {
+				this._changeReviewService.reportOwnEdit(this.model.uri);
+			}
 			if (this._takeOver(e, baseline)) {
 				return;
 			}
@@ -885,6 +890,21 @@ export class ReviewedFile extends Disposable {
 		}
 		this._computeDiff();
 		return true;
+	}
+
+	/**
+	 * Saves the file after an approval, the way the reviewer does with a key, also when nothing was written in it.
+	 * What runs when a file is saved, like a formatter, never ran on what an agent wrote into the file, and runs
+	 * now. What it changes is the reviewer's doing, like anything a save of theirs changes: outside of the changes
+	 * that are still under review it becomes part of the reviewed version, and is staged with it.
+	 */
+	async saveApproved(): Promise<void> {
+		this._approvalSaves++;
+		try {
+			await this._textFileService.save(this.model.uri, { reason: SaveReason.EXPLICIT, force: true });
+		} finally {
+			this._approvalSaves--;
+		}
 	}
 
 	/** The file was saved. What the reviewer wrote in it is on disk now, and can be staged. */

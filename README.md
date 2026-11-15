@@ -30,8 +30,10 @@ vs-kot is not a general-purpose VS Code distribution. If you want VS Code withou
 
 A change that is not staged in git counts as not reviewed. vs-kot shows every such change inline in the normal editor, removed lines in red and added lines in green, with two buttons on each change:
 
-- **Approve** (`⌘Y`) stages that one change in git. Staged means reviewed.
+- **Approve** (`⌘Y`) stages that one change in git. Staged means reviewed. It also saves the file, so that what runs on a save, such as the formatter, runs on what the agent wrote. What the formatter changes needs no approval.
 - **Request Change** (`⌘N`) copies the file, the lines, the passage and your note to the clipboard, ready to paste to the agent.
+
+Changes that are close to each other, with ten unchanged lines between them at most, are one change with one pair of buttons.
 
 A floating bar moves between changes (`F7`, `⇧F7`) and between files (`⌥F7`, `⇧⌥F7`) and approves a whole file (`⇧⌘Y`). When a file has nothing left to review, the editor jumps to the next changed file. When nothing is left at all, everything is staged and you commit as usual.
 
