@@ -39,17 +39,18 @@ printf 'export function greet(name: string): string {\n    return "Hello " + nam
 # For the review bar: its arrows have to be at the same place whatever file is under review. So there is one file of
 # each kind that used to move them: with one change, with line numbers of four digits, with twelve changes, deleted
 # and new. Together with the others that is more than nine files, so the file counter gets a second digit.
+# The twelve changes are twelve unchanged lines apart: any closer, and the review shows them as one change.
 # numbered <name> <lines> <n>: a file of that many lines; every n-th line differs from what "numbered <name> <lines> 0" writes.
 numbered() { awk -v name="$1" -v count="$2" -v every="$3" 'BEGIN { for (i = 1; i <= count; i++) print "export const " name "_" i " = " ((every && i % every == 0) ? -i : i) ";" }'; }
 mkdir bar
 for n in 1 2 3 4 5 6 7 8; do numbered "plain$n" 12 0 > "bar/plain$n.ts"; done
 numbered long 1200 0 > bar/long.ts
-numbered many 72 0 > bar/many.ts
+numbered many 156 0 > bar/many.ts
 numbered gone 12 0 > bar/gone.ts
 git init -q . && git add . && git -c user.name=test -c user.email=test@example.com commit -qm init
 for n in 1 2 3 4 5 6 7 8; do numbered "plain$n" 12 7 > "bar/plain$n.ts"; done
 numbered long 1200 500 > bar/long.ts
-numbered many 72 6 > bar/many.ts
+numbered many 156 13 > bar/many.ts
 rm bar/gone.ts
 numbered new1 12 0 > bar/new1.ts
 numbered new2 12 0 > bar/new2.ts
