@@ -76,5 +76,9 @@ if ! mv "$NEW" "$APP"; then
 fi
 rm -rf "$APP.old"
 
+# Every build carries the same date on its app folder, and macOS keeps showing the icon it has stored for an app
+# until that date changes. A new date makes it read the icon of this version.
+touch "$APP" || true
+
 echo "vs-kot $VERSION is installed in $DIR."
 open "$APP"

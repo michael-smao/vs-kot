@@ -123,6 +123,10 @@ if ! mv "$INCOMING" "$APP"; then
 fi
 trap - HUP INT TERM
 
+# Every build carries the same date on its app folder, and macOS keeps showing the icon it has stored for an app
+# until that date changes. A new date makes it read the icon of this version.
+touch "$APP" || log "could not set the date of $APP, the icon may stay the previous one"
+
 # 4. Tidy up and open the new version.
 rm -rf "$OLD" || log "could not delete the previous version at $OLD"
 rm -rf "$HERE/work" "$HERE/failed" "$HERE/failed.unseen"
