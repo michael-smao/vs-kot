@@ -31,12 +31,15 @@ const read = (name: string) => fs.readFileSync(file(name), 'utf8');
 
 // --- a small repository, and settings of Claude Code the way it writes them
 fs.rmSync(home, { recursive: true, force: true }); fs.mkdirSync(path.join(ws, 'src'), { recursive: true }); fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-const A = `export interface Item {\n    name: string;\n    price: number;\n    qty: number;\n}\n\nexport function total(items: Item[]): number {\n    return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\n\nexport function names(items: Item[]): string[] {\n    return items.map((item) => item.name);\n}\n`;
-const B = `export function greet(name: string): string {\n    return "Hello " + name;\n}\n\nexport function bye(name: string): string {\n    return "Bye " + name;\n}\n`;
+// Twelve lines that nobody changes. Two changes with these between them stay two changes, each with its own label and
+// its own approval. Closer ones are one change to the reviewer: review-groups.ts checks that.
+const apart = (name: string) => Array.from({ length: 12 }, (_, i) => `export const ${name}${i + 1} = ${i + 1};\n`).join('');
+const A = `export interface Item {\n    name: string;\n    price: number;\n    qty: number;\n}\n\nexport function total(items: Item[]): number {\n    return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\n\n${apart('rate')}\nexport function names(items: Item[]): string[] {\n    return items.map((item) => item.name);\n}\n`;
+const B = `export function greet(name: string): string {\n    return "Hello " + name;\n}\n\n${apart('word')}\nexport function bye(name: string): string {\n    return "Bye " + name;\n}\n`;
 fs.writeFileSync(file('a.ts'), A); fs.writeFileSync(file('b.ts'), B);
 // one file per check of what Claude Code staged or committed: each says hello and goodbye in its own words. No
 // name is the end of another one: the files are opened by typing their name, and the first match is taken.
-const greeting = (word: string) => `export function hello(name: string): string {\n    return "${word} hello " + name;\n}\n\nexport const version = 1;\n\nexport function bye(name: string): string {\n    return "${word} bye " + name;\n}\n`;
+const greeting = (word: string) => `export function hello(name: string): string {\n    return "${word} hello " + name;\n}\n\n${apart(`${word}Low`)}\nexport const version = 1;\n\n${apart(`${word}High`)}\nexport function bye(name: string): string {\n    return "${word} bye " + name;\n}\n`;
 for (const name of ['staged', 'committed', 'outside', 'during', 'branch', 'gone', 'part', 'erased', 'dropped']) { fs.writeFileSync(file(`${name}.ts`), greeting(name)); }
 const commit = ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q'];
 git('init', '-q', '.'); git('add', '.'); git(...commit, '-m', 'init');
@@ -147,7 +150,7 @@ const entries = () => fs.existsSync(path.join(record, 'files')) ? fs.readdirSync
 		runHooks('Bash', { command: 'ls' }, { stdout: 'a.ts\nb.ts', stderr: '', interrupted: false });
 		const eventsAfterNoChange = events();
 		fs.writeFileSync(file('b.ts'), read('b.ts').replace('"Bye " + name', '"Goodbye " + name'));
-		runHooks('Bash', { command: `sed -i '' 's/Bye/Goodbye/' src/b.ts` }, { stdout: '', stderr: '', interrupted: false, bashEditDiff: { files: [{ filePath: file('b.ts'), hunks: [{ oldStart: 6, oldLines: 1, newStart: 6, newLines: 1, lines: ['-    return "Bye " + name;', '+    return "Goodbye " + name;'] }] }], moreFiles: 0, changedFiles: [file('b.ts')] } });
+		runHooks('Bash', { command: `sed -i '' 's/Bye/Goodbye/' src/b.ts` }, { stdout: '', stderr: '', interrupted: false, bashEditDiff: { files: [{ filePath: file('b.ts'), hunks: [{ oldStart: 19, oldLines: 1, newStart: 19, newLines: 1, lines: ['-    return "Bye " + name;', '+    return "Goodbye " + name;'] }] }], moreFiles: 0, changedFiles: [file('b.ts')] } });
 		await settle();
 		check('a change by a shell command of Claude Code is marked, and a command that changed nothing leaves nothing behind', eventsAfterNoChange === eventsBefore && await origins() === '- Claude', `events kept for "ls": ${eventsAfterNoChange - eventsBefore}; changes top to bottom: ${await origins()}`);
 
