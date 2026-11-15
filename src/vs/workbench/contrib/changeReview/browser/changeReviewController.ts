@@ -38,24 +38,26 @@ import { IQuickInputService } from '../../../../platform/quickinput/common/quick
 import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { withoutRewrittenLines } from '../common/changeHighlights.js';
 import { CHANGE_REVIEW_EDITOR_CONTRIBUTION_ID, ChangeReviewCommandId, ChangeReviewFileKind, ctxChangeReviewCursorInChange, ctxChangeReviewHasChanges, ctxChangeReviewHasPendingChanges, IChangeReviewEditor, IChangeReviewFile, IChangeReviewService } from '../common/changeReview.js';
 import { groupCloseChanges } from '../common/changeReviewGroups.js';
 import { findClaudeDeletion, findClaudeEntry, IClaudeRecordEntry, IClaudeRecordService } from '../common/claudeRecord.js';
 import { IChangeReviewFilesService, ReviewedFile } from './changeReviewedFile.js';
 
-// --- colors: brighter than the diff editor's, since here they sit inside the code that is being read
+// --- colors: quiet tints, since the code on them is being read and has to keep its syntax colors legible.
+// The text color lies on top of the line color, so the two add up.
 
 registerColor('changeReview.addedLineBackground',
-	{ dark: '#3ddc8440', light: '#2db66a40', hcDark: '#3ddc8440', hcLight: '#2db66a40' },
+	{ dark: '#3ddc841f', light: '#2db66a2b', hcDark: '#3ddc841f', hcLight: '#2db66a2b' },
 	localize('changeReview.addedLineBackground', "Background color of lines that an unreviewed change added."));
 registerColor('changeReview.addedTextBackground',
-	{ dark: '#3ddc8470', light: '#2db66a70', hcDark: '#3ddc8470', hcLight: '#2db66a70' },
+	{ dark: '#3ddc842b', light: '#2db66a3d', hcDark: '#3ddc842b', hcLight: '#2db66a3d' },
 	localize('changeReview.addedTextBackground', "Background color of the text that an unreviewed change added inside a line."));
 registerColor('changeReview.removedLineBackground',
-	{ dark: '#ff5a5a47', light: '#f0484840', hcDark: '#ff5a5a47', hcLight: '#f0484840' },
+	{ dark: '#ff5a5a21', light: '#f0484826', hcDark: '#ff5a5a21', hcLight: '#f0484826' },
 	localize('changeReview.removedLineBackground', "Background color of lines that an unreviewed change removed."));
 registerColor('changeReview.removedTextBackground',
-	{ dark: '#ff5a5a80', light: '#f0484870', hcDark: '#ff5a5a80', hcLight: '#f0484870' },
+	{ dark: '#ff5a5a30', light: '#f0484838', hcDark: '#ff5a5a30', hcLight: '#f0484838' },
 	localize('changeReview.removedTextBackground', "Background color of the text that an unreviewed change removed inside a line."));
 
 const addedLineDecoration = ModelDecorationOptions.register({
@@ -588,6 +590,8 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 			getLineInjectedText: () => null
 		}) : undefined;
 		const shownRemovedLines = (mapping: LineRangeMapping) => Math.min(mapping.original.length, MAX_REMOVED_LINES_SHOWN);
+		// A change can end right after the last line of a file
+		const lineContentOf = (textModel: ITextModel) => (lineNumber: number) => lineNumber <= textModel.getLineCount() ? textModel.getLineContent(lineNumber) : '';
 		if (lineBreaksComputer) {
 			for (const hunk of this._hunks) {
 				for (const mapping of hunk.mappings) {
@@ -629,10 +633,11 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 				// Added lines are part of the file: tint them green
 				if (!mapping.modified.isEmpty) {
 					decorations.push({ range: mapping.modified.toInclusiveRange()!, options: addedLineDecoration });
-					for (const innerChange of innerChanges) {
-						if (!innerChange.modifiedRange.isEmpty() && mapping.modified.contains(innerChange.modifiedRange.startLineNumber)) {
-							decorations.push({ range: innerChange.modifiedRange, options: addedTextDecoration });
-						}
+					const addedText = innerChanges
+						.map(innerChange => innerChange.modifiedRange)
+						.filter(range => !range.isEmpty() && mapping.modified.contains(range.startLineNumber));
+					for (const range of withoutRewrittenLines(addedText, lineContentOf(model))) {
+						decorations.push({ range, options: addedTextDecoration });
 					}
 				}
 
@@ -648,10 +653,13 @@ export class ChangeReviewController extends Disposable implements IEditorContrib
 						original.mightContainNonBasicASCII(),
 						original.mightContainRTL()
 					);
-					const inlineDecorations = innerChanges
-						.filter(innerChange => !innerChange.originalRange.isEmpty() && innerChange.originalRange.endLineNumber < firstLine + shownLineCount)
-						.map(innerChange => new InlineDecoration(
-							innerChange.originalRange.delta(-(mapping.original.startLineNumber - 1)),
+					const removedText = innerChanges
+						.map(innerChange => innerChange.originalRange)
+						.filter(range => !range.isEmpty());
+					const inlineDecorations = withoutRewrittenLines(removedText, lineContentOf(original))
+						.filter(range => range.endLineNumber < firstLine + shownLineCount)
+						.map(range => new InlineDecoration(
+							range.delta(-(mapping.original.startLineNumber - 1)),
 							REMOVED_TEXT_CLASS_NAME,
 							InlineDecorationType.Regular
 						));
