@@ -15,6 +15,7 @@ import { IMergedEnvironmentVariableCollection, ISerializableEnvironmentDescripti
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { OperatingSystem } from '../../../../base/common/platform.js';
+import { isVsKotEnvironmentCollection } from '../../../../platform/terminal/common/vsKotEnvironmentCollections.js';
 
 interface ISerializableExtensionEnvironmentVariableCollection {
 	extensionIdentifier: string;
@@ -162,6 +163,10 @@ export class EnvironmentVariableService extends Disposable implements IEnvironme
 		const registeredExtensions = this._extensionService.extensions;
 		let changes = false;
 		this.collections.forEach((_, extensionIdentifier) => {
+			// vs-kot: a collection of VS Kot itself belongs to no extension, see vsKotEnvironmentCollections.ts.
+			if (isVsKotEnvironmentCollection(extensionIdentifier)) {
+				return;
+			}
 			const isExtensionRegistered = registeredExtensions.some(r => r.identifier.value === extensionIdentifier);
 			if (!isExtensionRegistered) {
 				this.collections.delete(extensionIdentifier);

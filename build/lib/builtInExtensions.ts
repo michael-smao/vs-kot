@@ -29,6 +29,12 @@ export interface IExtensionDefinition {
 	 * The matching release asset is resolved by convention as `<name>-<osAlias>-<arch>.vsix`.
 	 */
 	platformSpecific?: { [target: string]: string };
+	/**
+	 * vs-kot: the target platform (e.g. `darwin-arm64`) of a platform-specific extension that is
+	 * downloaded from the gallery. Open VSX serves such an extension only when the request names its
+	 * platform. `sha256` is the checksum of the VSIX for this platform.
+	 */
+	targetPlatform?: string;
 	metadata: {
 		id: string;
 		publisherId: {

@@ -249,9 +249,10 @@ const baseHeaders = {
 	'X-Market-User-Id': '291C1CD0-051A-4123-9B4B-30D60EF52EE2',
 };
 
-export function fromMarketplace(serviceUrl: string, { name: extensionName, version, sha256, metadata }: IExtensionDefinition): Stream {
+export function fromMarketplace(serviceUrl: string, { name: extensionName, version, sha256, metadata, targetPlatform }: IExtensionDefinition): Stream {
 	const [publisher, name] = extensionName.split('.');
-	const url = `${serviceUrl}/publishers/${publisher}/vsextensions/${name}/${version}/vspackage`;
+	// vs-kot: a platform-specific extension from Open VSX names its platform; without it the download fails.
+	const url = `${serviceUrl}/publishers/${publisher}/vsextensions/${name}/${version}/vspackage${targetPlatform ? `?targetPlatform=${encodeURIComponent(targetPlatform)}` : ''}`;
 
 	fancyLog('Downloading extension:', ansiColors.yellow(`${extensionName}@${version}`), '...');
 

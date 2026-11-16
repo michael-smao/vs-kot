@@ -13,6 +13,7 @@ import { TerminalStatus } from './terminalStatusList.js';
 import Severity from '../../../../base/common/severity.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
+import { getVsKotEnvironmentCollectionName } from '../../../../platform/terminal/common/vsKotEnvironmentCollections.js';
 
 export class EnvironmentVariableInfoStale implements IEnvironmentVariableInfo {
 	readonly requiresAction = true;
@@ -127,5 +128,6 @@ function addExtensionIdentifiers(extSet: Set<string>, diff: IterableIterator<IEx
 }
 
 function getExtensionName(id: string, extensionService: IExtensionService): string {
-	return extensionService.extensions.find(e => e.id === id)?.displayName || id;
+	// vs-kot: VS Kot's own collections have a name of their own, see vsKotEnvironmentCollections.ts.
+	return getVsKotEnvironmentCollectionName(id) ?? (extensionService.extensions.find(e => e.id === id)?.displayName || id);
 }

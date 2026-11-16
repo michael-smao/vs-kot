@@ -37,7 +37,7 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 (async () => {
 	if (packagedApp) {
 		const ext = fs.readdirSync(path.join(packagedApp, 'Contents', 'Resources', 'app', 'extensions'));
-		const wanted = ['esbenp.prettier-vscode', 'formulahendry.auto-close-tag', 'formulahendry.auto-rename-tag', 'dsznajder.es7-react-js-snippets', 'vs-kot-tab-completion', 'vs-kot-bridge'];
+		const wanted = ['esbenp.prettier-vscode', 'formulahendry.auto-close-tag', 'formulahendry.auto-rename-tag', 'dsznajder.es7-react-js-snippets', 'charliermarsh.ruff', 'detachhead.basedpyright', 'vs-kot-tab-completion', 'vs-kot-bridge'];
 		check('team extensions are inside the app', wanted.every(w => ext.some(e => e.startsWith(w))), wanted.filter(w => !ext.some(e => e.startsWith(w))).join(', ') || `${ext.length} built-in extensions`);
 		check('the Copilot extension is not inside the app', !ext.some(e => /copilot/i.test(e)));
 		// .vs-kot/package.sh packs it: without it the app offers no extension for Anydeck

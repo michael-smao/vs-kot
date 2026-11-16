@@ -5,6 +5,7 @@
 
 import { IProcessEnvironment, isWindows } from '../../../base/common/platform.js';
 import { EnvironmentVariableMutatorType, EnvironmentVariableScope, IEnvironmentVariableCollection, IExtensionOwnedEnvironmentDescriptionMutator, IExtensionOwnedEnvironmentVariableMutator, IMergedEnvironmentVariableCollection, IMergedEnvironmentVariableCollectionDiff } from './environmentVariable.js';
+import { VS_KOT_PYTHON_ENVIRONMENT_COLLECTION } from './vsKotEnvironmentCollections.js';
 
 type VariableResolver = (str: string) => Promise<string>;
 
@@ -112,7 +113,8 @@ export class MergedEnvironmentVariableCollection implements IMergedEnvironmentVa
 
 	private blockPythonActivationVar(variable: string, extensionIdentifier: string): boolean {
 		// Only Python env extension can modify Python activate env var.
-		if (PYTHON_ACTIVATION_VARS_PATTERN.test(variable) && PYTHON_ENV_EXTENSION_ID !== extensionIdentifier) {
+		// vs-kot: and VS Kot's own Python environment, which uses the same hook of the shell integration.
+		if (PYTHON_ACTIVATION_VARS_PATTERN.test(variable) && PYTHON_ENV_EXTENSION_ID !== extensionIdentifier && extensionIdentifier !== VS_KOT_PYTHON_ENVIRONMENT_COLLECTION) {
 			return true;
 		}
 		return false;

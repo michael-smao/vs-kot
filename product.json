@@ -1,5 +1,5 @@
 {
-	"//": "vs-kot: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol), and licenseUrl, serverLicenseUrl and reportIssueUrl, which point at this repository instead of Microsoft's. Added: extensionsGallery (Open VSX). Added for the team: vsKotManagedSettings (locked settings), vsKotDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets). The default for editor.quickSuggestions is the classic one: with upstream's newer default the editor drops a tab completion that takes longer than 750 ms. editor.suggest.selectionMode is whenQuickSuggestion: right after a trigger character such as a dot the suggestion list selects nothing, so tab completion may propose any member instead of having to continue the first list entry. Added for updates: vsKotVersion (our release number; raise it for every release, the tag is v plus this number), vsKotUpdatePublicKeys (the public halves of the keys a release may be signed with; the app installs nothing that is not signed with one of them, and the private half is with whoever publishes releases, see .vs-kot/sign-release.sh), updateUrl (where the app looks for latest.json, the file every release carries) and downloadUrl (the page people are sent to when the app cannot replace itself). Added for sign-ins: vsKotSecretsInMemory (true: what the editor and its extensions store as a secret, such as a sign-in, is kept in memory until the editor quits, and the system keychain is never used. The app is signed ad hoc, so every update is a new app to macOS, which then asks for the password of the keychain before the editor may read its own entry there).",
+	"//": "vs-kot: JSON has no comments, so the fork's edits to this file are listed here. Changed: the product identity (name*, applicationName, *DataFolderName, server*/tunnel* names, win32*, darwin*, linux*, urlProtocol), and licenseUrl, serverLicenseUrl and reportIssueUrl, which point at this repository instead of Microsoft's. Added: extensionsGallery (Open VSX). Added for the team: vsKotManagedSettings (locked settings), vsKotDefaultSettings (changeable defaults) and the team's extensions in builtInExtensions (Prettier, Auto Close Tag, Auto Rename Tag, ES7+ React snippets, Ruff, BasedPyright; Ruff is platform-specific, so its entry names the targetPlatform of the VSIX to download). The default for editor.quickSuggestions is the classic one: with upstream's newer default the editor drops a tab completion that takes longer than 750 ms. editor.suggest.selectionMode is whenQuickSuggestion: right after a trigger character such as a dot the suggestion list selects nothing, so tab completion may propose any member instead of having to continue the first list entry. Added for updates: vsKotVersion (our release number; raise it for every release, the tag is v plus this number), vsKotUpdatePublicKeys (the public halves of the keys a release may be signed with; the app installs nothing that is not signed with one of them, and the private half is with whoever publishes releases, see .vs-kot/sign-release.sh), updateUrl (where the app looks for latest.json, the file every release carries) and downloadUrl (the page people are sent to when the app cannot replace itself). Added for sign-ins: vsKotSecretsInMemory (true: what the editor and its extensions store as a secret, such as a sign-in, is kept in memory until the editor quits, and the system keychain is never used. The app is signed ad hoc, so every update is a new app to macOS, which then asks for the password of the keychain before the editor may read its own entry there).",
 	"nameShort": "vs-kot",
 	"nameLong": "vs-kot",
 	"applicationName": "vs-kot",
@@ -156,6 +156,39 @@
 					"flags": ""
 				},
 				"publisherDisplayName": "dsznajder"
+			}
+		},
+		{
+			"name": "charliermarsh.ruff",
+			"version": "2026.96.0",
+			"targetPlatform": "darwin-arm64",
+			"sha256": "ea2a2a7411adda1738e1789b5885563201bfd1d519dac91552c6eabc87f3d6cc",
+			"repo": "https://github.com/astral-sh/ruff-vscode",
+			"metadata": {
+				"id": "c2ca9b43-fa38-44fc-928e-5125970b9c00",
+				"publisherId": {
+					"publisherId": "ae7578b3-bd2b-455d-bbd6-cd231eee3c09",
+					"publisherName": "charliermarsh",
+					"displayName": "charliermarsh",
+					"flags": ""
+				},
+				"publisherDisplayName": "charliermarsh"
+			}
+		},
+		{
+			"name": "detachhead.basedpyright",
+			"version": "1.40.2",
+			"sha256": "9c87b0b992714ca2f9298cb7e98bda621612f0ee96121a8e77ee7fcccce2f351",
+			"repo": "https://github.com/DetachHead/basedpyright",
+			"metadata": {
+				"id": "249aa903-c0c5-4eb3-9deb-06895c663b8b",
+				"publisherId": {
+					"publisherId": "01a1a70a-2616-76c4-bb60-9c01003d5c39",
+					"publisherName": "detachhead",
+					"displayName": "detachhead",
+					"flags": ""
+				},
+				"publisherDisplayName": "detachhead"
 			}
 		}
 	],
@@ -332,7 +365,17 @@
 			"comments": "off",
 			"strings": "off"
 		},
-		"editor.suggest.selectionMode": "whenQuickSuggestion"
+		"editor.suggest.selectionMode": "whenQuickSuggestion",
+		"[python]": {
+			"editor.defaultFormatter": "charliermarsh.ruff"
+		},
+		"terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
+		"basedpyright.importStrategy": "useBundled",
+		"basedpyright.analysis.typeCheckingMode": "standard",
+		"basedpyright.analysis.inlayHints.variableTypes": false,
+		"basedpyright.analysis.inlayHints.callArgumentNames": false,
+		"basedpyright.analysis.inlayHints.functionReturnTypes": false,
+		"basedpyright.analysis.inlayHints.genericTypes": false
 	},
 	"vsKotSecretsInMemory": true,
 	"vsKotVersion": "0.5.10",

@@ -69,10 +69,22 @@ On a Mac with Anydeck, vs-kot offers the extension once, and again for each new 
 
 Anydeck talks to vs-kot through the bridge: every window has a socket under `~/.vs-kot/bridge` that only your user can open, and it does only what the list above says. The setting `bridge.enabled` switches it off. The extension's source is in [.vs-kot/anydeck](.vs-kot/anydeck).
 
+### Python environments
+
+When the opened folder has a Python virtual environment, for example `.venv`, vs-kot asks whether to use it, until you choose one, choose none, or pick Don't Show Again. With several, for example in a folder that holds several projects, you choose one.
+
+- vs-kot looks for environments (folders with a `pyvenv.cfg`) among the opened folder's own folders, whatever their name, and in a `.venv` or `venv` one level below them. So `.venv`, `venv`, `env` and `backend/.venv` are found. An environment made later in one of these places, with `python3 -m venv .venv` or `uv venv`, is offered too.
+- Every new terminal starts with the environment activated, as if you had typed `source .venv/bin/activate`: the prompt shows it, `deactivate` works, and a `pyenv init` in your shell's startup files cannot put another `python` in front. That holds for zsh, bash, fish and PowerShell, through the terminal's shell integration, which is on by default. Terminals that come back after a restart are activated too. Tasks are not: they use the Python on your PATH, so call `.venv/bin/python` in `tasks.json`.
+- Ruff lints with the environment: a `ruff` installed in it wins over the one built in. BasedPyright resolves imports and checks types against the packages of the environment.
+- The status bar shows the active environment. Selecting it, or the command **Select Python Environment**, chooses another one or none. When the chosen environment is deleted, the status bar says so, and the environment is used again as soon as it is made anew.
+- The choice is kept per folder on your Mac. Nothing is written into the project, so nothing shows up in the change review or in git. Only trusted folders are looked at, because activating an environment runs its scripts.
+- With Microsoft's Python extension or its Python Environments extension installed, those look after the environment and vs-kot stays out of it. Ruff suggests installing them on its first start; vs-kot keeps that hint, and Ruff's other information, in the notification center, because vs-kot already hands Ruff the environment. Ruff's errors still show.
+
 ### Team defaults
 
 - Format on save, 4-space indentation and the matching Prettier settings are locked. The Settings editor shows them as managed.
-- Prettier, Auto Close Tag, Auto Rename Tag and the ES7+ React snippets are built in.
+- Prettier, Auto Close Tag, Auto Rename Tag, the ES7+ React snippets, [Ruff](https://docs.astral.sh/ruff/) and [BasedPyright](https://docs.basedpyright.com) are built in. Python files are formatted with Ruff on save; a project's `pyproject.toml` or `ruff.toml` decides the style. BasedPyright checks types in its `standard` mode and shows no inlay hints.
+- Terminals come back when a folder is opened again: the terminals you typed in, with their layout, folder and output, also after the window was only closed and not quit. What ran in them is not started again, and a terminal you never typed in is not kept.
 - Extensions are installed from [Open VSX](https://open-vsx.org).
 
 These are our team's choices. They live in one file, [product.json](product.json), under `vsKotManagedSettings`, `vsKotDefaultSettings` and `builtInExtensions`, so another team can replace them with its own.
@@ -128,6 +140,8 @@ pnpm run compile-client
 - `.vs-kot/package.sh` builds the macOS app and the zip for a release. The result lands next to the repo folder, in `VSCode-darwin-arm64/`. It also puts the extension for Anydeck into the app: a zip of `.vs-kot/anydeck`, which is all an `.anydeck-actionsource` is.
 - `.vs-kot/release-check/` holds a check that drives a real window through every feature listed above. Run it before a release, on the source build and on the packaged app.
 - `.vs-kot/release-check/update-check.ts` checks the updater with the packaged app: an older copy of it has to find, download and install the new build.
+- `.vs-kot/release-check/python-env.ts` checks the Python environments with the source build: it makes a `.venv`, activates it from the notification, and looks at what a new terminal's `python` is despite `pyenv init`, then chooses `api/.venv` with Select Python Environment, deletes and remakes it, lets Ruff lint with it, makes sure Ruff shows no toast, and makes sure nothing was written into the project.
+- `.vs-kot/release-check/terminal-restore.ts` checks with the source build that two split terminals, both typed in, come back when a folder is opened again, after Close Window and after quitting: side by side, with their output and folder.
 - `.vs-kot/sign-release.sh` signs the build with the release key. The key is a file on the Mac of whoever publishes releases; the script's header says where it is, how to keep it safe and how to change it. `package.sh` calls the script when the key is there.
 - `.vs-kot/release.sh` publishes the build as a GitHub release, and only a signed one. Every release carries `latest.json` next to the zip; installed apps find a release through that file. Raise `vsKotVersion` in `product.json` for every release.
 
@@ -141,6 +155,7 @@ pnpm run compile-client
 | Change review | `src/vs/workbench/contrib/changeReview/` |
 | Tab completion | `extensions/vs-kot-tab-completion/` |
 | Tab Completion view | `src/vs/workbench/contrib/vsKotTabCompletion/` |
+| Python environments | `src/vs/workbench/contrib/vsKotPython/`, `src/vs/platform/terminal/common/vsKotEnvironmentCollections.ts` |
 | Team settings | `product.json`, `src/vs/workbench/contrib/vsKotTeam/` |
 | AI switched off | `src/vs/platform/chat/common/vsKotAIOff.ts` |
 | Activity bar | `src/vs/workbench/browser/parts/vsKotActivityBar.ts` |
