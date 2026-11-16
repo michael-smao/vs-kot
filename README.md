@@ -69,6 +69,16 @@ On a Mac with Anydeck, vs-kot offers the extension once, and again for each new 
 
 Anydeck talks to vs-kot through the bridge: every window has a socket under `~/.vs-kot/bridge` that only your user can open, and it does only what the list above says. The setting `bridge.enabled` switches it off. The extension's source is in [.vs-kot/anydeck](.vs-kot/anydeck).
 
+### Worktrees
+
+An agent often works in a git worktree of its own, a second checkout of the repository on another branch. Claude Code puts them into `.claude/worktrees/`. vs-kot goes from one checkout to another in the same window:
+
+- **Switch Worktree** (the worktree icon in the Explorer's title bar, or the status bar next to the branch) lists the main checkout and every worktree of the repository, also the ones that Claude Code or git created. Choosing one opens its folder in the window: the Explorer, the search and the change review are those of that checkout. The window starts anew as when another folder is opened, so running terminals end. The button on each entry opens it in a new window instead.
+- **Create Worktree** asks for a branch. A branch that exists, here or on a remote, is checked out in the new worktree; one from a remote becomes a branch that tracks it. Another name starts a new branch from what the window shows. The worktree goes into `.claude/worktrees/` of the main checkout, where Claude Code finds it too, and the window goes there. When nothing ignores that folder, it is added to `.git/info/exclude`, so that `git status` and `git add .` leave the worktrees alone.
+- A worktree is given the files that git does not track and that it needs to run, before the window opens it: `.env`, `.env.*`, `.dev.vars`, `.dev.vars.*` and `CLAUDE.local.md`, from the main checkout. Only files that git ignores are copied, and a file that the worktree has already stays as it is. Dependencies and build output such as `node_modules` are not copied: they belong to a branch and are installed anew. A Python environment is not copied either, also not one called `.env`: it would run the code of the main checkout. The setting `git.worktreeIncludeFiles` names the files, and a project can name more in a `.worktreeinclude` file, the file that Claude Code reads for its own worktrees. Copying needs the repository to be open in git: a window that shows a folder inside the repository, where git was not allowed to open the repository around it, says so instead.
+- In the main checkout, the Explorer and the search leave out `.claude/worktrees/`, so that the files of a worktree are not edited where the change review cannot see them.
+- What Claude Code stages or commits in a worktree stays under review, also while the window shows another checkout of the repository.
+
 ### Python environments
 
 When the opened folder has a Python virtual environment, for example `.venv`, vs-kot asks whether to use it, until you choose one, choose none, or pick Don't Show Again. With several, for example in a folder that holds several projects, you choose one.
@@ -140,6 +150,7 @@ pnpm run compile-client
 - `.vs-kot/package.sh` builds the macOS app and the zip for a release. The result lands next to the repo folder, in `VSCode-darwin-arm64/`. It also puts the extension for Anydeck into the app: a zip of `.vs-kot/anydeck`, which is all an `.anydeck-actionsource` is.
 - `.vs-kot/release-check/` holds a check that drives a real window through every feature listed above. Run it before a release, on the source build and on the packaged app.
 - `.vs-kot/release-check/update-check.ts` checks the updater with the packaged app: an older copy of it has to find, download and install the new build.
+- `.vs-kot/release-check/worktrees.ts` checks the worktree switcher with the source build: it creates a worktree, goes to it, to one that git created outside the editor and back, and looks at the files each one was given.
 - `.vs-kot/release-check/python-env.ts` checks the Python environments with the source build: it makes a `.venv`, activates it from the notification, and looks at what a new terminal's `python` is despite `pyenv init`, then chooses `api/.venv` with Select Python Environment, deletes and remakes it, lets Ruff lint with it, makes sure Ruff shows no toast, and makes sure nothing was written into the project.
 - `.vs-kot/release-check/terminal-restore.ts` checks with the source build that two split terminals, both typed in, come back when a folder is opened again, after Close Window and after quitting: side by side, with their output and folder.
 - `.vs-kot/sign-release.sh` signs the build with the release key. The key is a file on the Mac of whoever publishes releases; the script's header says where it is, how to keep it safe and how to change it. `package.sh` calls the script when the key is there.
@@ -155,6 +166,7 @@ pnpm run compile-client
 | Change review | `src/vs/workbench/contrib/changeReview/` |
 | Tab completion | `extensions/vs-kot-tab-completion/` |
 | Tab Completion view | `src/vs/workbench/contrib/vsKotTabCompletion/` |
+| Worktrees | `src/vs/workbench/contrib/vsKotWorktrees/`, `extensions/git/src/vsKotWorktrees.ts`, `extensions/git/src/vsKotWorktreeFiles.ts` |
 | Python environments | `src/vs/workbench/contrib/vsKotPython/`, `src/vs/platform/terminal/common/vsKotEnvironmentCollections.ts` |
 | Team settings | `product.json`, `src/vs/workbench/contrib/vsKotTeam/` |
 | AI switched off | `src/vs/platform/chat/common/vsKotAIOff.ts` |

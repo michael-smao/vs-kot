@@ -36,6 +36,7 @@ import { getSafeNotificationMessage } from './notification';
 import { GitQuickDiffProvider, StagedResourceQuickDiffProvider } from './quickDiffProvider';
 import { resolveWorktreeIncludePaths, sanitizeWorktreeIncludePatterns } from './worktreeInclude';
 import { createWorktreeSymlink, filterWorktreeSymlinkFolders, getWorktreeSymlinkFolderCandidates, type WorktreeSymlinkStatus } from './worktreeSymlink';
+import { getNestedWorktreeFolders, isPythonEnvironment, readWorktreeIncludeFile } from './vsKotWorktreeFiles'; // vs-kot: see provideWorktreeFiles
 
 const timeout = (millis: number) => new Promise(c => setTimeout(c, millis));
 
@@ -2005,9 +2006,19 @@ export class Repository implements Disposable {
 		await this._runWorktreeCreatedTasks(worktreePath);
 	}
 
-	private async _symlinkWorktreeFolders(worktreePath: string): Promise<string[]> {
+	// vs-kot: the worktree switcher provides the shared and copied files to a worktree, also to one that was created
+	// outside the editor, for example by Claude Code. They come from `sourceRoot`, the main checkout, which need not
+	// be this repository: the window may show another worktree. What is in the worktree already stays as it is.
+	// Returns how many files and folders were copied.
+	async provideWorktreeFiles(worktreePath: string, sourceRoot: string): Promise<number> {
+		const symlinkFolders = await this._symlinkWorktreeFolders(worktreePath, sourceRoot);
+		return await this._copyWorktreeIncludeFiles(worktreePath, symlinkFolders, sourceRoot);
+	}
+
+	// vs-kot: `sourceRoot`, see provideWorktreeFiles
+	private async _symlinkWorktreeFolders(worktreePath: string, sourceRoot: string = this.root): Promise<string[]> {
 		try {
-			const directories = await this._getWorktreeSymlinkFolders();
+			const directories = await this._getWorktreeSymlinkFolders(sourceRoot);
 			if (directories.length === 0) {
 				return [];
 			}
@@ -2019,7 +2030,7 @@ export class Repository implements Disposable {
 
 			for (const directory of directories) {
 				try {
-					const status = await createWorktreeSymlink(this.root, worktreePath, directory);
+					const status = await createWorktreeSymlink(sourceRoot, worktreePath, directory);
 					statuses.set(status, (statuses.get(status) ?? 0) + 1);
 					if (status === 'created') {
 						createdDirectories.push(directory);
@@ -2055,8 +2066,9 @@ export class Repository implements Disposable {
 		}
 	}
 
-	private async _getWorktreeSymlinkFolders(): Promise<string[]> {
-		const config = workspace.getConfiguration('git', Uri.file(this.root));
+	// vs-kot: `sourceRoot`, see provideWorktreeFiles
+	private async _getWorktreeSymlinkFolders(sourceRoot: string = this.root): Promise<string[]> {
+		const config = workspace.getConfiguration('git', Uri.file(sourceRoot));
 		const worktreeSymlinkFolders = config.get<string[]>('worktreeSymlinkFolders', []);
 
 		const patterns = sanitizeWorktreeIncludePatterns(worktreeSymlinkFolders);
@@ -2087,9 +2099,9 @@ export class Repository implements Disposable {
 
 			const baseArgs = ['ls-files', '--others', '--ignored', '-z'];
 			const [ignoredOutput, matchedOutput, directoryOutput] = await Promise.all([
-				tryExec(this.root, [...baseArgs, '--exclude-standard']),
-				tryExec(this.root, [...baseArgs, `--exclude-from=${patternsFile}`]),
-				tryExec(this.root, [...baseArgs, '--exclude-standard', '--directory'])
+				tryExec(sourceRoot, [...baseArgs, '--exclude-standard']),
+				tryExec(sourceRoot, [...baseArgs, `--exclude-from=${patternsFile}`]),
+				tryExec(sourceRoot, [...baseArgs, '--exclude-standard', '--directory'])
 			]);
 			if (ignoredOutput === undefined || matchedOutput === undefined || directoryOutput === undefined) {
 				return [];
@@ -2108,7 +2120,7 @@ export class Repository implements Disposable {
 
 			const candidateInput = candidates.map(candidate => `${candidate}/`).join('\0');
 			const [ignoredDirectoriesOutput, matchedDirectoriesOutput] = await Promise.all([
-				tryExec(this.root, ['check-ignore', '--no-index', '-z', '--stdin'], candidateInput, true),
+				tryExec(sourceRoot, ['check-ignore', '--no-index', '-z', '--stdin'], candidateInput, true),
 				tryExec(matcherRoot, ['-c', `core.excludesFile=${patternsFile}`, 'check-ignore', '--no-index', '-z', '--stdin'], candidateInput, true)
 			]);
 			if (ignoredDirectoriesOutput === undefined || matchedDirectoriesOutput === undefined) {
@@ -2151,14 +2163,24 @@ export class Repository implements Disposable {
 	 * `git.worktreeIncludeFiles` patterns are matched by git using
 	 * `.gitignore` semantics.
 	 */
-	private async _getWorktreeIncludePaths(worktreePath: string, excludedFolders: readonly string[]): Promise<string[]> {
-		const config = workspace.getConfiguration('git', Uri.file(this.root));
+	// vs-kot: `sourceRoot`, see provideWorktreeFiles
+	private async _getWorktreeIncludePaths(worktreePath: string, excludedFolders: readonly string[], sourceRoot: string = this.root): Promise<string[]> {
+		const config = workspace.getConfiguration('git', Uri.file(sourceRoot));
 		const worktreeIncludeFiles = config.get<string[]>('worktreeIncludeFiles', []);
 
 		const includePatterns = sanitizeWorktreeIncludePatterns(worktreeIncludeFiles);
 		if (includePatterns.length !== worktreeIncludeFiles.length) {
 			this.logger.warn(`[Repository][_getWorktreeIncludePaths] Ignoring ${worktreeIncludeFiles.length - includePatterns.length} pattern(s) containing line breaks.`);
 		}
+		// vs-kot: Claude Code copies what `.worktreeinclude` names into the worktrees it creates. The editor does the
+		// same, so that a worktree has the same files whoever created it. Other worktrees that lie inside the main
+		// checkout, as Claude Code's do, are never copied into this one.
+		try {
+			includePatterns.push(...readWorktreeIncludeFile(await fsPromises.readFile(path.join(sourceRoot, '.worktreeinclude'), 'utf8')));
+		} catch {
+			// there is no such file
+		}
+		excludedFolders = [...excludedFolders, ...getNestedWorktreeFolders(sourceRoot, this.worktrees.map(worktree => worktree.path))];
 		if (includePatterns.length === 0) {
 			return [];
 		}
@@ -2197,9 +2219,9 @@ export class Repository implements Disposable {
 			// invocation would yield their union, hence the separate call.
 			const baseArgs = ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'];
 			const [ignoredOutput, directoryOutput, includedOutput, worktreeOutput] = await Promise.all([
-				tryExec(this.root, baseArgs),
-				tryExec(this.root, [...baseArgs, '--directory', '--no-empty-directory']),
-				tryExec(this.root, ['ls-files', '--others', '--ignored', `--exclude-from=${includePatternsFile}`, '-z']),
+				tryExec(sourceRoot, baseArgs),
+				tryExec(sourceRoot, [...baseArgs, '--directory', '--no-empty-directory']),
+				tryExec(sourceRoot, ['ls-files', '--others', '--ignored', `--exclude-from=${includePatternsFile}`, '-z']),
 				tryExec(worktreePath, ['ls-files', '-z'])
 			]);
 			if (ignoredOutput === undefined || includedOutput === undefined || worktreeOutput === undefined) {
@@ -2216,11 +2238,12 @@ export class Repository implements Disposable {
 		}
 	}
 
-	private async _copyWorktreeIncludeFiles(worktreePath: string, excludedFolders: readonly string[]): Promise<void> {
+	// vs-kot: `sourceRoot` and the number of what was copied, see provideWorktreeFiles
+	private async _copyWorktreeIncludeFiles(worktreePath: string, excludedFolders: readonly string[], sourceRoot: string = this.root): Promise<number> {
 		try {
-			const files = await this._getWorktreeIncludePaths(worktreePath, excludedFolders);
+			const files = await this._getWorktreeIncludePaths(worktreePath, excludedFolders, sourceRoot);
 			if (files.length === 0) {
-				return;
+				return 0;
 			}
 
 			const startTime = performance.now();
@@ -2229,7 +2252,7 @@ export class Repository implements Disposable {
 			// Copy files and folders
 			const results = await Promise.allSettled(files.map(file => {
 				return limiter.queue(async () => {
-					const sourcePath = path.join(this.root, file);
+					const sourcePath = path.join(sourceRoot, file);
 					const targetPath = path.join(worktreePath, file);
 
 					try {
@@ -2239,6 +2262,9 @@ export class Repository implements Disposable {
 						if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
 							throw err;
 						}
+					}
+					if (await isPythonEnvironment(sourcePath)) {
+						return false; // vs-kot: see isPythonEnvironment
 					}
 
 					await fsPromises.mkdir(path.dirname(targetPath), { recursive: true });
@@ -2260,8 +2286,10 @@ export class Repository implements Disposable {
 					this.logger.warn(`  - ${(error as PromiseRejectedResult).reason}`);
 				}
 			}
+			return copiedFiles;
 		} catch (err) {
 			this.logger.warn(`[Repository][_copyWorktreeIncludeFiles] Failed to copy folder(s)/file(s) to worktree: ${err}`);
+			return 0;
 		}
 	}
 

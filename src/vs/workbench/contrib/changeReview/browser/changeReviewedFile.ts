@@ -62,6 +62,8 @@ const COMMAND_RUNNING_DELAY_MS = 2000;
 interface IBlobAnswer {
 	readonly blob?: string;
 	readonly text?: string;
+	/** The repository that told what is staged. */
+	readonly root?: string;
 }
 
 export class ReviewedFile extends Disposable {
@@ -538,6 +540,11 @@ export class ReviewedFile extends Disposable {
 			}
 			if (!answer) {
 				this._checkHoldScheduler.schedule(); // git cannot be asked yet, or failed
+				return;
+			}
+			if (answer.root !== undefined && !isEqual(URI.file(answer.root), URI.file(hold.repository))) {
+				// Another repository answered, as the main checkout does for a worktree inside it that is not open
+				// here. What it has staged says nothing about the file: the window that has the worktree open decides.
 				return;
 			}
 			const staged = answer.blob ?? null;

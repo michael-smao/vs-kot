@@ -239,6 +239,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/vsKotWorktrees",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/contrib/vsKotPython",
 			"project": "vscode-workbench"
 		},

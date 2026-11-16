@@ -1996,8 +1996,10 @@ export class CommandCenter {
 
 	// vs-kot: what the change review needs to keep a reviewed version of its own, for a file whose changes were
 	// staged by someone else: the id of the blob that is staged, the text of a blob, or a blob for a text.
+	// The repository that answered comes with what is staged: a file of a worktree that lies inside the main checkout,
+	// as Claude Code's do, is answered for by the main checkout when the worktree is not open in this window.
 	@command('git.reviewedBlob')
-	async reviewedBlob(uri: Uri, request: { readonly read?: string; readonly write?: string }): Promise<{ readonly blob?: string; readonly text?: string } | undefined> {
+	async reviewedBlob(uri: Uri, request: { readonly read?: string; readonly write?: string }): Promise<{ readonly blob?: string; readonly text?: string; readonly root?: string } | undefined> {
 		if (!uri || uri.scheme !== 'file' || !request) {
 			return undefined;
 		}
@@ -2024,12 +2026,12 @@ export class CommandCenter {
 					return { blob: await repository.writeBlob(await workspace.encode(request.write, { encoding })) };
 				}
 				try {
-					return { blob: (await repository.getObjectDetails('', resource.fsPath)).object };
+					return { blob: (await repository.getObjectDetails('', resource.fsPath)).object, root: repository.root };
 				} catch (err) {
 					if (err.gitErrorCode !== GitErrorCodes.UnknownPath) {
 						throw err;
 					}
-					return {}; // git has no staged version of the file
+					return { root: repository.root }; // git has no staged version of the file
 				}
 			});
 

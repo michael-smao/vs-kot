@@ -29,6 +29,7 @@ import { GitCommitInputBoxCodeActionsProvider, GitCommitInputBoxDiagnosticsManag
 import { GitBlameController } from './blame';
 import { CloneManager } from './cloneManager';
 import { getAskpassPaths } from './askpassManager';
+import { registerVsKotWorktreeCommands } from './vsKotWorktrees'; // vs-kot: the worktree switcher of the workbench
 
 const deactivateTasks: { (): Promise<void> }[] = [];
 
@@ -120,7 +121,8 @@ async function createModel(context: ExtensionContext, logger: LogOutputChannel, 
 		new GitBlameController(model),
 		new GitTimelineProvider(model, cc),
 		new GitEditSessionIdentityProvider(model),
-		new TerminalShellExecutionManager(model, logger)
+		new TerminalShellExecutionManager(model, logger),
+		registerVsKotWorktreeCommands(git, model, logger) // vs-kot: the worktree switcher of the workbench
 	);
 
 	const postCommitCommandsProvider = new GitPostCommitCommandsProvider(model);

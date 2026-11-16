@@ -215,7 +215,9 @@ export class ChangeReviewService extends Disposable implements IChangeReviewServ
 		const files: IChangeReviewFile[] = [];
 		for (const hold of this._claudeRecordService.holds) {
 			const uri = URI.file(hold.path);
-			if (!roots.some(root => isEqualOrParent(uri, root))) {
+			// The repository itself must be open here: a worktree inside the main checkout, as Claude Code's are, is a
+			// repository of its own, whose files the main checkout does not know
+			if (!roots.some(root => isEqual(URI.file(hold.repository), root) && isEqualOrParent(uri, root))) {
 				continue; // in a repository that is not open in this window
 			}
 
