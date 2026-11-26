@@ -59,3 +59,7 @@ dist
 .v[0-9]*/
 # Local agent validation evidence
 .agent-validation/
+# Made by `python -m anydeck_sdk pack` and by .vs-kot/package.sh
+/.vs-kot/anydeck/build/
+/extensions/vs-kot-bridge/anydeck/
+__pycache__/

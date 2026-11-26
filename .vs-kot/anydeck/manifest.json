@@ -1,0 +1,13 @@
+{
+  "manifest": 1,
+  "id": "com.vs-kot.anydeck",
+  "name": "vs-kot",
+  "version": "1.0.0",
+  "author": "crljn.labs",
+  "website": "https://github.com/michael-smao/vs-kot/tree/main/.vs-kot/anydeck",
+  "sdk": ">=0.0.1,<1",
+  "source": "vskot",
+  "entry": "VsKotSource",
+  "systems": ["macos"],
+  "icon": "icon.png"
+}

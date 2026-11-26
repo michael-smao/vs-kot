@@ -17,6 +17,15 @@ case "$(ps -axww -o command=)" in
 	*"$OUT/"*) echo "An app is running from $OUT. Quit it first: this build deletes that folder."; exit 1 ;;
 esac
 
+# 0. The extension for Anydeck, into the bridge extension, which offers it for installing. An .anydeck-actionsource is
+#    a zip of the extension's files; Anydeck checks it when it is installed.
+ANYDECK_SOURCE="$ROOT/.vs-kot/anydeck"
+ANYDECK_VERSION="$(node -p 'require(process.argv[1]).version' "$ANYDECK_SOURCE/manifest.json")"
+ANYDECK_OUT="$ROOT/extensions/vs-kot-bridge/anydeck"
+rm -rf "$ANYDECK_OUT"
+mkdir -p "$ANYDECK_OUT"
+(cd "$ANYDECK_SOURCE" && zip -q -r -X "$ANYDECK_OUT/vskot-$ANYDECK_VERSION.anydeck-actionsource" manifest.json icon.png source translations -x '*__pycache__*')
+
 # 1. The repo's own packaging task: compiles, bundles, minifies and assembles the app (about 3 minutes).
 #    It deletes and recreates the VSCode-darwin-arm64 folder.
 pnpm run gulp vscode-darwin-arm64-min

@@ -1,0 +1,8 @@
+{
+	"displayName": "Bridge",
+	"description": "Lets programs on this computer, such as Anydeck, see how the review stands and approve, step through changes or accept a suggestion, also while another app is in front.",
+	"command.installAnydeckExtension": "Install Anydeck Extension",
+	"command.category": "Anydeck",
+	"configuration.title": "Bridge",
+	"configuration.enabled": "Let programs on this computer, such as Anydeck, talk to vs-kot through a socket that only this user can open."
+}

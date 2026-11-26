@@ -37,9 +37,13 @@ const results = []; const check = (name, ok, detail) => { results.push(ok); cons
 (async () => {
 	if (packagedApp) {
 		const ext = fs.readdirSync(path.join(packagedApp, 'Contents', 'Resources', 'app', 'extensions'));
-		const wanted = ['esbenp.prettier-vscode', 'formulahendry.auto-close-tag', 'formulahendry.auto-rename-tag', 'dsznajder.es7-react-js-snippets', 'vs-kot-tab-completion'];
+		const wanted = ['esbenp.prettier-vscode', 'formulahendry.auto-close-tag', 'formulahendry.auto-rename-tag', 'dsznajder.es7-react-js-snippets', 'vs-kot-tab-completion', 'vs-kot-bridge'];
 		check('team extensions are inside the app', wanted.every(w => ext.some(e => e.startsWith(w))), wanted.filter(w => !ext.some(e => e.startsWith(w))).join(', ') || `${ext.length} built-in extensions`);
 		check('the Copilot extension is not inside the app', !ext.some(e => /copilot/i.test(e)));
+		// .vs-kot/package.sh packs it: without it the app offers no extension for Anydeck
+		const bridge = ext.find(e => e.startsWith('vs-kot-bridge'));
+		const packed = bridge ? (fs.existsSync(path.join(packagedApp, 'Contents', 'Resources', 'app', 'extensions', bridge, 'anydeck')) ? fs.readdirSync(path.join(packagedApp, 'Contents', 'Resources', 'app', 'extensions', bridge, 'anydeck')) : []) : [];
+		check('the extension for Anydeck is inside the app', packed.some(name => name.endsWith('.anydeck-actionsource')), packed.join(', ') || '.vs-kot/package.sh packs it');
 		// the updater itself is checked by update-check.ts; here only that the app is set up to use it
 		const product = JSON.parse(fs.readFileSync(path.join(packagedApp, 'Contents', 'Resources', 'app', 'product.json'), 'utf8'));
 		check('the app knows its release number and where updates come from', /^\d+\.\d+\.\d+$/.test(product.vsKotVersion ?? '') && /^https:\/\/.+\/releases\/latest\/download$/.test(product.updateUrl ?? ''), `${product.vsKotVersion} from ${product.updateUrl}`);
