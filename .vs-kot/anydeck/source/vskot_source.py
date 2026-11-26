@@ -10,6 +10,7 @@ from anydeck_sdk import ActionSource
 from . import bridge
 from .vskot_actions import VsKotActions
 from .vskot_display import VsKotDisplay
+from .vskot_settings import VsKotSettings
 from .vskot_values import VsKotValues
 
 APPS = (Path("/Applications/vs-kot.app"), Path.home() / "Applications" / "vs-kot.app")
@@ -19,7 +20,7 @@ class VsKotSource(ActionSource):
     action_source = "vskot"
     tag = "application"
     instantiable = False
-    provides = (VsKotActions, VsKotValues, VsKotDisplay)
+    provides = (VsKotSettings, VsKotActions, VsKotValues, VsKotDisplay)
 
     @classmethod
     def here(cls) -> bool:

@@ -17,17 +17,26 @@ case "$(ps -axww -o command=)" in
 	*"$OUT/"*) echo "An app is running from $OUT. Quit it first: this build deletes that folder."; exit 1 ;;
 esac
 
-# 0. The extension for Anydeck, packed into the bridge extension, which offers it for installing. Packing needs
-#    Anydeck's SDK under Python 3.14: ANYDECK_PYTHON names that Python, else the one of an Anydeck checkout next to
-#    this repo. Without it the app is built all the same, and offers no extension for Anydeck.
-ANYDECK_PYTHON="${ANYDECK_PYTHON:-$(dirname "$ROOT")/anydeck/backend/.venv/bin/python}"
+# 0. The extension for Anydeck, packed into the bridge extension, which offers it for installing. Packing takes
+#    Anydeck's SDK, which runs on Python 3.14: it is installed from PyPI into .build/anydeck-sdk, once. ANYDECK_PYTHON
+#    names another Python that has it, such as the one of an Anydeck checkout.
 rm -rf "$ROOT/extensions/vs-kot-bridge/anydeck"
-if [ -x "$ANYDECK_PYTHON" ] && "$ANYDECK_PYTHON" -c 'import anydeck_sdk' 2>/dev/null; then
-	"$ANYDECK_PYTHON" -m anydeck_sdk check "$ROOT/.vs-kot/anydeck"
-	"$ANYDECK_PYTHON" -m anydeck_sdk pack "$ROOT/.vs-kot/anydeck" -o "$ROOT/extensions/vs-kot-bridge/anydeck/"
-else
-	echo "Not packed: the extension for Anydeck needs Anydeck's SDK. Set ANYDECK_PYTHON to a Python 3.14 that has it."
+if [ -z "$ANYDECK_PYTHON" ]; then
+	ANYDECK_PYTHON="$ROOT/.build/anydeck-sdk/bin/python"
+	if ! [ -x "$ANYDECK_PYTHON" ] || ! "$ANYDECK_PYTHON" -c 'import anydeck_sdk' 2>/dev/null; then
+		PYTHON314="$(command -v python3.14 || true)"
+		if [ -z "$PYTHON314" ]; then
+			echo "Packing the extension for Anydeck needs Python 3.14: brew install python@3.14"
+			exit 1
+		fi
+		rm -rf "$ROOT/.build/anydeck-sdk"
+		"$PYTHON314" -m venv "$ROOT/.build/anydeck-sdk"
+		"$ANYDECK_PYTHON" -m pip install --quiet --disable-pip-version-check anydeck-sdk
+	fi
 fi
+"$ANYDECK_PYTHON" -m anydeck_sdk check "$ROOT/.vs-kot/anydeck"
+"$ANYDECK_PYTHON" -m anydeck_sdk pack "$ROOT/.vs-kot/anydeck" -o "$ROOT/extensions/vs-kot-bridge/anydeck/"
+find "$ROOT/.vs-kot/anydeck" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # 1. The repo's own packaging task: compiles, bundles, minifies and assembles the app (about 3 minutes).
 #    It deletes and recreates the VSCode-darwin-arm64 folder.

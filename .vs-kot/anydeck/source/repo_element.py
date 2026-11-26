@@ -1,6 +1,7 @@
-"""The folder of the vs-kot window used last, with the file in its editor
-and a dot that is green when nothing in it waits for review. Goes with
-"Ordner wechseln" on the knob: turned, the name changes.
+"""The folder chosen with "Ordner wechseln" - or, while none is chosen, the
+one of the vs-kot window used last - with the file in its editor and a dot
+that is green when nothing in it waits for review. Goes with "Ordner
+wechseln" on the knob: turned, the name changes.
 
     ▣ vs-kot              ●
       changeReview.ts
@@ -28,4 +29,4 @@ class RepoElement(DisplayElement):
             Column(Text(ref("vskot.repo"), size=18).bold(), Text(ref("vskot.review.file"), size=12, color=GREY), gap=0),
             Ellipse(color=when(ref("vskot.review.done"), DONE, ACCENT)).box(12, 12),
             gap=10,
-        ).show_if(ref("vskot.open"))
+        )

@@ -72,8 +72,13 @@ class ReviewElement(DisplayElement):
             parts.append(Text(ref("vskot.repo"), size=14, color=GREY, align="center"))
         parts += [ring, counts]
 
-        closed = Icon("lucide:power-off", color=GREY).box(side * 0.35, side * 0.35)
-        return Layers(Column(*parts, gap=8).show_if(OPEN), Column(closed).show_if(check(OPEN, "is_false")))
+        # The chosen folder that vs-kot does not have open: its name, and a power symbol
+        closed = Column(
+            Text(ref("vskot.repo"), size=14, color=GREY, align="center"),
+            Icon("lucide:power-off", color=GREY).box(side * 0.35, side * 0.35),
+            gap=12,
+        )
+        return Layers(Column(*parts, gap=8).show_if(OPEN), closed.show_if(check(OPEN, "is_false")))
 
 
 # Grey while Claude Code is quiet, orange while it works, green when it waits for a look.

@@ -9,8 +9,8 @@ The methods are `state`, `run` with an action, `recent` and `open` with a
 path. One connection per request: a window that closes takes nothing along
 that is waiting for it.
 
-The window that is spoken to is the one used last - in front, or else the
-one that was in front most recently.
+Which window is spoken to is for the caller to say: the one with a certain
+folder (window_of), or the one used last (last_used).
 """
 
 from __future__ import annotations
@@ -62,8 +62,7 @@ class Window:
         return float(self.state.get("lastFocused") or 0)
 
     def has(self, path: str) -> bool:
-        wanted = os.path.realpath(path)
-        return any(os.path.realpath(folder) == wanted for folder in self.folders)
+        return any(same(folder, path) for folder in self.folders)
 
 
 def call(path: Path, method: str, params: dict[str, Any] | None = None, timeout: float = QUICK) -> Any:
@@ -112,3 +111,13 @@ def windows() -> list[Window]:
 
 def last_used(found: list[Window]) -> Window | None:
     return max(found, key=lambda window: window.last_focused, default=None)
+
+
+def window_of(found: list[Window], path: str) -> Window | None:
+    """The window that has this folder open - the one used last, where
+    there are several."""
+    return last_used([window for window in found if window.has(path)])
+
+
+def same(one: str, other: str) -> bool:
+    return bool(one) and bool(other) and os.path.realpath(one) == os.path.realpath(other)
