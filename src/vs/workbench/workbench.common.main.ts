@@ -297,6 +297,9 @@ import './contrib/vsKotTeam/common/teamSettings.contribution.js';
 // vs-kot: Tab Completion view
 import './contrib/vsKotTabCompletion/browser/tabCompletion.contribution.js';
 
+// vs-kot: the bridge, for Anydeck and other programs on this computer
+import './contrib/vsKotBridge/browser/vsKotBridge.contribution.js';
+
 // Debug
 import './contrib/debug/browser/debug.contribution.js';
 import './contrib/debug/browser/debugEditorContribution.js';

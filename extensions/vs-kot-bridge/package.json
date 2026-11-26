@@ -1,0 +1,48 @@
+{
+	"name": "bridge",
+	"displayName": "%displayName%",
+	"description": "%description%",
+	"publisher": "vs-kot",
+	"version": "1.0.0",
+	"license": "MIT",
+	"engines": {
+		"vscode": "*"
+	},
+	"categories": [
+		"Other"
+	],
+	"main": "./out/extension",
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"scripts": {
+		"compile": "gulp compile-extension:vs-kot-bridge",
+		"watch": "gulp watch-extension:vs-kot-bridge"
+	},
+	"capabilities": {
+		"virtualWorkspaces": true,
+		"untrustedWorkspaces": {
+			"supported": true
+		}
+	},
+	"contributes": {
+		"commands": [
+			{
+				"command": "bridge.installAnydeckExtension",
+				"title": "%command.installAnydeckExtension%",
+				"category": "%command.category%"
+			}
+		],
+		"configuration": {
+			"title": "%configuration.title%",
+			"properties": {
+				"bridge.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "%configuration.enabled%",
+					"scope": "application"
+				}
+			}
+		}
+	}
+}

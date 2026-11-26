@@ -56,6 +56,18 @@ While you type, the editor suggests the rest of the line or a small block, and `
 - The same view has statistics: how many suggestions appeared, how many you accepted, and how many lines and characters that wrote, for today, the last seven days and all time. They are numbers only, kept on your Mac; Reset Statistics in the view's menu starts them at zero.
 - To use a model server of your own, set `tabCompletion.endpoint`. Ollama and OpenAI-style completion servers are supported.
 
+### Keys and a display, with Anydeck
+
+vs-kot comes with an extension for [Anydeck](https://crljnlabs.com/en/anydeck/), so the review and tab completion can run from the keys, the knob and the display of a keypad, also while another app is in front.
+
+- **Actions:** approve a change or a file, request a change, go to the next or previous change or file (the knob turns through them), undo a request, copy all requests, accept a suggestion (whole, a word or a line), dismiss or fetch one, switch tab completion and the review on and off, format the project, switch to one of the folders opened last, bring vs-kot to the front.
+- **On the display:** a ring that fills as the review goes on, with the files left in it and a tick when nothing is left; the folder and the file in the editor; the flash of tab completion with the suggestions taken today. The robot by the review turns green when Claude Code stopped and its changes wait.
+- **Format project** formats every file with the team's Prettier settings and stages what changes. Files under review and files with unsaved changes stay as they are: they are formatted when their changes are approved.
+
+On a Mac with Anydeck, vs-kot offers the extension once, and again for each new version. **Install Anydeck Extension** in the command palette does the same at any time.
+
+Anydeck talks to vs-kot through the bridge: every window has a socket under `~/.vs-kot/bridge` that only your user can open, and it does only what the list above says. The setting `bridge.enabled` switches it off. The extension's source is in [.vs-kot/anydeck](.vs-kot/anydeck).
+
 ### Team defaults
 
 - Format on save, 4-space indentation and the matching Prettier settings are locked. The Settings editor shows them as managed.
@@ -112,7 +124,7 @@ pnpm run compile-client
 .vs-kot/run.sh path/to/a/project
 ```
 
-- `.vs-kot/package.sh` builds the macOS app and the zip for a release. The result lands next to the repo folder, in `VSCode-darwin-arm64/`.
+- `.vs-kot/package.sh` builds the macOS app and the zip for a release. The result lands next to the repo folder, in `VSCode-darwin-arm64/`. It packs the extension for Anydeck into the app when `ANYDECK_PYTHON` names a Python 3.14 that has Anydeck's SDK, for example `ANYDECK_PYTHON=~/Coding/keyboard/anydeck/backend/.venv/bin/python`; without it, the app offers no extension for Anydeck.
 - `.vs-kot/release-check/` holds a check that drives a real window through every feature listed above. Run it before a release, on the source build and on the packaged app.
 - `.vs-kot/release-check/update-check.ts` checks the updater with the packaged app: an older copy of it has to find, download and install the new build.
 - `.vs-kot/sign-release.sh` signs the build with the release key. The key is a file on the Mac of whoever publishes releases; the script's header says where it is, how to keep it safe and how to change it. `package.sh` calls the script when the key is there.

@@ -17,6 +17,18 @@ case "$(ps -axww -o command=)" in
 	*"$OUT/"*) echo "An app is running from $OUT. Quit it first: this build deletes that folder."; exit 1 ;;
 esac
 
+# 0. The extension for Anydeck, packed into the bridge extension, which offers it for installing. Packing needs
+#    Anydeck's SDK under Python 3.14: ANYDECK_PYTHON names that Python, else the one of an Anydeck checkout next to
+#    this repo. Without it the app is built all the same, and offers no extension for Anydeck.
+ANYDECK_PYTHON="${ANYDECK_PYTHON:-$(dirname "$ROOT")/anydeck/backend/.venv/bin/python}"
+rm -rf "$ROOT/extensions/vs-kot-bridge/anydeck"
+if [ -x "$ANYDECK_PYTHON" ] && "$ANYDECK_PYTHON" -c 'import anydeck_sdk' 2>/dev/null; then
+	"$ANYDECK_PYTHON" -m anydeck_sdk check "$ROOT/.vs-kot/anydeck"
+	"$ANYDECK_PYTHON" -m anydeck_sdk pack "$ROOT/.vs-kot/anydeck" -o "$ROOT/extensions/vs-kot-bridge/anydeck/"
+else
+	echo "Not packed: the extension for Anydeck needs Anydeck's SDK. Set ANYDECK_PYTHON to a Python 3.14 that has it."
+fi
+
 # 1. The repo's own packaging task: compiles, bundles, minifies and assembles the app (about 3 minutes).
 #    It deletes and recreates the VSCode-darwin-arm64 folder.
 pnpm run gulp vscode-darwin-arm64-min

@@ -76,6 +76,7 @@ const compilations = [
 	'extensions/tunnel-forwarding/tsconfig.json',
 	'extensions/typescript-language-features/web/tsconfig.json',
 	'extensions/typescript-language-features/tsconfig.json',
+	'extensions/vs-kot-bridge/tsconfig.json', // vs-kot: the bridge for Anydeck and other programs on this computer
 	'extensions/vs-kot-tab-completion/tsconfig.json', // vs-kot: tab completion from a self-hosted model
 	'extensions/vscode-api-tests/tsconfig.json',
 	'extensions/vscode-colorize-tests/tsconfig.json',
