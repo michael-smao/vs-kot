@@ -71,8 +71,6 @@
   "references.vskot.formatting": "Das Projekt wird formatiert",
   "actions.field.vskot.repo": "Gewählter Ordner",
   "actions.field.vskot.repo.help": "Wohin die Aktionen gehen, wenn sie keinen eigenen Ordner nennen. „Ordner wechseln“ setzt ihn. Leer: das zuletzt benutzte Fenster.",
-  "picker.field.vskot.switch-repo.front": "Auch nach vorne holen",
-  "picker.field.vskot.switch-repo.front.help": "Das Fenster des Ordners kommt nach vorne, oder er wird geöffnet.",
   "references.vskot.path": "Der Pfad des Ordners",
   "vskot.error.notOpen": "vs-kot hat {repo} nicht offen.",
   "picker.field.vskot.approve.repo": "Ordner",

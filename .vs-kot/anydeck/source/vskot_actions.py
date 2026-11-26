@@ -22,7 +22,7 @@ the window used last.
                          is staged, files under review stay as they are
     switch-repo          choose the folder the other actions go to: the next
                          or the previous of the folders opened last, or one
-                         of them - and, if asked, bring its window to the front
+                         of them. Nothing comes to the front: that is show
     show                 the window of the folder to the front, opened if it
                          is not open
 """
@@ -38,7 +38,6 @@ from anydeck_sdk import (
     ActionError,
     ActionField,
     ApiList,
-    Checkbox,
     Choice,
     Condition,
     Container,
@@ -115,7 +114,6 @@ class VsKotActions(features.Action):
                     fields=(ActionField(REPO, ApiList(searchable=False), allow_reference=False),),
                     when=When((Condition("to", "eq", "repo"),)),
                 ),
-                ActionField("front", Checkbox(), required=False, default=False, allow_reference=False),
             ),
             returns=(Return("repo"), Return("path")),
         ),
@@ -182,8 +180,6 @@ class VsKotActions(features.Action):
             path = self._step(to == "previous")
 
         self.features.of(VsKotSettings).choose(path)
-        if params.get("front"):
-            self._bring_to_front(path)
 
         name = Path(path).name
         self.tracking.say("vskot.summary.switch", {"repo": shown(name)})

@@ -28,4 +28,4 @@ A running Anydeck loads a new version of an extension at its next start. A displ
 
 ## A new version
 
-Raise `version` in `manifest.json`. `.vs-kot/package.sh` packs it into the app with the SDK from PyPI, and vs-kot offers each new version once on a Mac with Anydeck.
+Raise `version` in `manifest.json`. `.vs-kot/package.sh` zips it into the app, and vs-kot offers each new version once on a Mac with Anydeck.

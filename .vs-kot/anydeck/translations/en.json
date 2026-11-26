@@ -71,8 +71,6 @@
   "references.vskot.formatting": "The project is being formatted",
   "actions.field.vskot.repo": "Chosen folder",
   "actions.field.vskot.repo.help": "Where the actions go when they name no folder of their own. \"Switch folder\" sets it. Empty: the window used last.",
-  "picker.field.vskot.switch-repo.front": "Also bring it to the front",
-  "picker.field.vskot.switch-repo.front.help": "The window of the folder comes to the front, or the folder is opened.",
   "references.vskot.path": "The path of the folder",
   "vskot.error.notOpen": "vs-kot does not have {repo} open.",
   "picker.field.vskot.approve.repo": "Folder",

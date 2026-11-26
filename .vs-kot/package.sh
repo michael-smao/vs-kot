@@ -17,26 +17,14 @@ case "$(ps -axww -o command=)" in
 	*"$OUT/"*) echo "An app is running from $OUT. Quit it first: this build deletes that folder."; exit 1 ;;
 esac
 
-# 0. The extension for Anydeck, packed into the bridge extension, which offers it for installing. Packing takes
-#    Anydeck's SDK, which runs on Python 3.14: it is installed from PyPI into .build/anydeck-sdk, once. ANYDECK_PYTHON
-#    names another Python that has it, such as the one of an Anydeck checkout.
-rm -rf "$ROOT/extensions/vs-kot-bridge/anydeck"
-if [ -z "$ANYDECK_PYTHON" ]; then
-	ANYDECK_PYTHON="$ROOT/.build/anydeck-sdk/bin/python"
-	if ! [ -x "$ANYDECK_PYTHON" ] || ! "$ANYDECK_PYTHON" -c 'import anydeck_sdk' 2>/dev/null; then
-		PYTHON314="$(command -v python3.14 || true)"
-		if [ -z "$PYTHON314" ]; then
-			echo "Packing the extension for Anydeck needs Python 3.14: brew install python@3.14"
-			exit 1
-		fi
-		rm -rf "$ROOT/.build/anydeck-sdk"
-		"$PYTHON314" -m venv "$ROOT/.build/anydeck-sdk"
-		"$ANYDECK_PYTHON" -m pip install --quiet --disable-pip-version-check anydeck-sdk
-	fi
-fi
-"$ANYDECK_PYTHON" -m anydeck_sdk check "$ROOT/.vs-kot/anydeck"
-"$ANYDECK_PYTHON" -m anydeck_sdk pack "$ROOT/.vs-kot/anydeck" -o "$ROOT/extensions/vs-kot-bridge/anydeck/"
-find "$ROOT/.vs-kot/anydeck" -name __pycache__ -type d -prune -exec rm -rf {} +
+# 0. The extension for Anydeck, into the bridge extension, which offers it for installing. An .anydeck-actionsource is
+#    a zip of the extension's files; Anydeck checks it when it is installed.
+ANYDECK_SOURCE="$ROOT/.vs-kot/anydeck"
+ANYDECK_VERSION="$(node -p 'require(process.argv[1]).version' "$ANYDECK_SOURCE/manifest.json")"
+ANYDECK_OUT="$ROOT/extensions/vs-kot-bridge/anydeck"
+rm -rf "$ANYDECK_OUT"
+mkdir -p "$ANYDECK_OUT"
+(cd "$ANYDECK_SOURCE" && zip -q -r -X "$ANYDECK_OUT/vskot-$ANYDECK_VERSION.anydeck-actionsource" manifest.json icon.png source translations -x '*__pycache__*')
 
 # 1. The repo's own packaging task: compiles, bundles, minifies and assembles the app (about 3 minutes).
 #    It deletes and recreates the VSCode-darwin-arm64 folder.
